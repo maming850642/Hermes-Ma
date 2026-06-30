@@ -1,0 +1,86 @@
+# ============================================
+# Hermes 全局配置模板（唯一真相源）
+# ============================================
+# 复制本文件为 config.yaml 并填入真实值：
+#     cp config.example.yaml config.yaml
+# 修改后重启生效。环境变量（大写下划线）可覆盖同名键。
+# --------------------------------------------
+
+# ---- LLM 配置 ----
+# 支持任何兼容 OpenAI API 的服务（OpenAI / DeepSeek / Ollama / one-api 等）
+openai_api_key: "sk-your-api-key-here"
+openai_base_url: "http://localhost:8000/v1"
+llm_model_name: "qwen2.5:32b"
+llm_timeout: 120                # LLM 单次请求/流式超时秒数（防自托管端点挂死；0=不限）
+
+# ---- Web 服务（web_fastapi）----
+# python -m web_fastapi.main 启动时读取。
+web_host: "0.0.0.0"             # 监听地址：0.0.0.0=局域网可访问，127.0.0.1=仅本机
+                                # （环境变量 WEB_HOST 可覆盖）
+# web_port: 8000                # 注：端口当前在 web_fastapi/main.py 写死为 8000，
+                                # 此键暂未被读取（如需改端口改代码或用反向代理）。
+
+# ---- Agent 参数 ----
+max_short_term_messages: 20     # 短期记忆保留的对话轮数（1轮 = 1次用户+1次助手）
+max_memory_results: 5           # 检索长期记忆时返回的最大条数（top-k）
+memory_min_score: 0.4           # 记忆检索最低相似度阈值（0~1，越高越严格）
+max_agent_iterations: 50        # agent_llm 节点最大执行次数（防死循环）
+tool_loop_threshold: 5          # 重复工具调用检测阈值（最近 N 次完全相同的工具调用判定为死循环并终止）
+                                # 0 = 关闭检测；值越大越宽松（原硬编码为 3，用户反馈太严格故默认放宽至 5）
+
+# ---- 上下文压缩 ----
+compact_keep_recent: 10         # 压缩时保留最近几条消息
+compact_min_messages: 20        # 触发压缩的最小消息数
+compact_summary_max_tokens: 5000
+
+# ---- 人工审批 ----
+# 2026-06-19: 修复 Bug 3 —— 移除 interrupt_tools 死配置。
+# 人工审批统一由 LLM 主动调用 request_human_approval 工具触发，
+# 该工具会在执行前 interrupt() 暂停图，等待 CLI/Web 弹窗确认。
+# 原先配置的 interrupt_tools 字段从未被任何代码读取，形成"承诺但不生效"的不一致。
+
+# ---- 会话配置 ----
+session_persist: true           # 是否将对话历史持久化到本地 JSON
+
+# ---- 子智能体 ----
+sub_agent_max_depth: 2          # 子智能体最大嵌套深度
+sub_agent_default_timeout: 60   # 子智能体默认超时（秒）
+sub_agent_default_max_tokens: 20000
+
+# ---- 文件系统 ----
+# Agent 可访问的文件系统根目录（空=虚拟文件系统，非空=真实路径）
+workspace_root: ""
+fs_max_file_size: 1048576       # 单次文件读取最大字节数（默认 1MB）
+
+# ---- Shell 执行器（默认关闭，opt-in）----
+# 在 workspace_root 内执行 shell 命令。安全模型：白名单自动放行 + 其余 HITL 人工审批。
+# 注意：这是纵深防御而非完备沙箱；shell=True 带注入风险，真正隔离应靠容器/VM。
+shell_enabled: false            # 总开关：false 时 run_shell 直接拒绝执行
+# 白名单命令（逗号分隔）：只读/查询类命令自动放行。默认不含解释器(python/node)以防绕过。
+shell_allowed_commands: "ls,ll,dir,cat,head,tail,less,more,echo,printf,grep,egrep,fgrep,rg,find,pwd,whoami,hostname,date,cal,wc,sort,uniq,cut,tr,awk,sed,diff,comm,cmp,git,tree,env,printenv,stat,file,du,df"
+# 危险模式黑名单（用 `;;` 分隔，因为某些模式含逗号）：即使主程序在白名单也拦截并转人工审批。
+shell_blocked_patterns: "rm -rf /;;rm -rf [A-Za-z]:[\\/];;mkfs;;dd of=/dev/;;> /dev/sd;;shutdown;;reboot;;format [A-Za-z]:;;> /etc/;;curl|sh;;wget|sh"
+shell_timeout: 30               # 单次执行硬超时秒数（0=不限）
+shell_max_output_chars: 8000    # stdout/stderr 各自截断字符数
+
+# ---- 网络工具 ----
+web_proxy: ""                   # 代理 URL（如 http://127.0.0.1:7890）。为空=直连（国内默认）；
+                                # 非空则 web_search / web_fetch 走代理（适合境外站点）。
+web_search_timeout: 15          # web_search 请求超时秒数（2026-06-19 新增，修复 Bug 9）
+web_fetch_timeout: 10
+web_fetch_max_chars: 8000
+
+# ---- 技能（Skills）----
+# 外部技能目录（分号分隔），复用已有的 Cline Rules / Cursor Rules 等
+extra_skills_dirs: ""
+
+# ---- MCP（Model Context Protocol）----
+# MCP 服务器配置文件路径。相对路径=项目根下，也可填绝对路径。
+# Agent 会知道此路径，可自主用文件工具编辑来增删 MCP server。
+mcp_servers_file: "mcp_servers.yaml"
+
+# ---- 日志 ----
+# 分层日志：logs/info.log（INFO+，仅 hermes.*）+ logs/error.log（ERROR+，全部 logger）
+# 按天滚动保留 7 天。控制台保持 WARNING（--debug 时 DEBUG）。
+log_dir: "logs"        # 日志目录（相对项目根，绝对路径亦可）
+log_to_file: true      # 是否写文件（false 则只控制台）

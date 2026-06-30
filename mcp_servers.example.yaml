@@ -1,0 +1,37 @@
+# MCP 服务器配置示例
+# 文档: https://modelcontextprotocol.io
+# 格式参考 Claude Desktop。每个 server 是一个独立的工具集。
+# 只有 enabled=true 且连接成功的 server，其工具才会被 Agent 加载。
+#
+# 使用方法:
+#   1. 复制本文件为 mcp_servers.yaml
+#   2. 启用你需要的 server（enabled: true）
+#   3. 或在 CLI 中输入 /mcp 交互式管理
+#
+# 注意: 含 @ 的包名必须加引号（如 "@modelcontextprotocol/..."），否则 YAML 解析报错。
+
+servers:
+  # ---- 示例: Sequential Thinking ----
+  sequential-thinking:
+    command: npx
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-sequential-thinking"
+    enabled: false
+
+  # ---- 示例: Filesystem ----
+  filesystem:
+    command: npx
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-filesystem"
+      - "."
+    enabled: false
+
+  # ---- 示例: 远程 server（SSE）----
+  # remote-example:
+  #   url: "http://localhost:8080/sse"
+  #   transport: sse
+  #   headers:
+  #     Authorization: "Bearer your-token"
+  #   enabled: false

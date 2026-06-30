@@ -1,0 +1,13 @@
+{
+  "name": "sequential-thinking",
+  "enabled": true,
+  "transport": "stdio",
+  "command": "npx",
+  "args": [
+    "-y",
+    "@modelcontextprotocol/server-sequential-thinking"
+  ],
+  "env": {},
+  "url": "",
+  "headers": {}
+}

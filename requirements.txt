@@ -1,0 +1,44 @@
+# ============================================
+# Hermes 项目依赖清单
+# 版本锁定，确保环境一致性
+# ============================================
+
+# ---- 核心框架 ----
+langgraph>=0.2.0,<0.3.0          # 工作流编排框架
+langchain-openai>=0.3.0,<1.0.0   # OpenAI 兼容 API 的 LangChain 集成
+langchain-core>=0.3.0,<1.0.0     # LangChain 核心抽象
+
+# ---- 记忆管理 ----
+# 2026-06-22: 从 Mem0 迁移至自研记忆模块（src/memory/），不再依赖 mem0ai
+# 自研模块用 httpx 直连 Qdrant HTTP API，也不依赖 qdrant-client
+
+# ---- 配置管理 ----
+pydantic>=2.0.0,<3.0.0           # 数据校验
+pydantic-settings>=2.0.0,<3.0.0  # 环境变量配置管理
+python-dotenv>=1.0.0,<2.0.0
+pyyaml>=6.0,<7.0                 # YAML 配置解析（config.yaml、mcp_config.yaml）
+
+# ---- CLI 美化 ----
+rich>=13.0.0,<14.0.0             # 终端美化输出
+prompt_toolkit>=3.0.0,<4.0.0     # 高级命令行输入
+
+# ---- Web UI ----
+streamlit>=1.37.0,<2.0.0         # Streamlit Web 界面（旧版，建议用 web_fastapi）
+fastapi>=0.115.0,<1.0.0          # FastAPI Web 框架（2026-06-25 新增，替代 Streamlit）
+uvicorn[standard]>=0.30.0,<1.0.0 # ASGI 服务器
+jinja2>=3.1.0,<4.0.0             # 模板引擎
+python-multipart>=0.0.9          # 表单解析
+itsdangerous>=2.2.0,<3.0.0       # 签名 cookie
+
+# ---- 工具 ----
+tiktoken>=0.7.0,<1.0.0           # Token 计数
+httpx>=0.27.0,<1.0.0             # HTTP 客户端（健康检查、Qdrant API 检测、嵌入模型检测）
+
+# ---- 网络工具 ----
+trafilatura>=1.6.0               # 网页正文提取（web_fetch / web_fetch_direct 工具）
+beautifulsoup4>=4.12.0           # HTML 解析（web_search_bing 解析必应结果，2026-06-18 新增）
+# 2026-06-16: web_search 改用 httpx 直连 DuckDuckGo HTML 接口，不再依赖 DDGS 库
+# 2026-06-18: web_search_bing 改用必应国内直连（cn.bing.com），无需代理
+
+# ---- MCP（Model Context Protocol 客户端） ----
+fastmcp>=3.0.0                   # MCP Client，连接外部 MCP Server 复用生态工具（2026-06-19 新增）
