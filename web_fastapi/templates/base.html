@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  {# 当前激活项目（服务端渲染时读取）：前端按它过滤侧栏/恢复会话（ADR-0005） #}
+  <meta name="active-project" content="{{ active_project | default('inbox') }}">
+  <title>{% block title %}Hermes-Ma{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/main.css?v=proj20">
+  <script src="/static/vendor/marked.min.js"></script>
+  {# P3-13：highlight.min.js 曾是空操作 shim（全仓无 hljs 调用，代码高亮
+     功能不存在），早已不再加载；shim 文件已删除，无引用残留 #}
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">⚡ Hermes-Ma</div>
+    {% block navbar %}
+    <nav class="nav">
+      <a href="/" title="主页"><span class="nav-ic">🏠</span><span class="nav-tx">主页</span></a>
+      <a href="/chat" title="对话"><span class="nav-ic">💬</span><span class="nav-tx">对话</span></a>
+      <a href="/memory" title="记忆"><span class="nav-ic">🧠</span><span class="nav-tx">记忆</span></a>
+      <a href="/waker" title="Waker"><span class="nav-ic">⏰</span><span class="nav-tx">Waker</span></a>
+      <a href="/wakerflow" title="WakerFlow"><span class="nav-ic">🔀</span><span class="nav-tx">WakerFlow</span></a>
+      <a href="/usage" title="用量"><span class="nav-ic">📊</span><span class="nav-tx">用量</span></a>
+    </nav>
+    {% endblock %}
+    {% block userarea %}
+    <div class="user-area">
+      <!-- 会话状态徽章：仅 chat 页由 chat.js 填充（📝草稿 / #sid），他页 hidden；放右侧避免挤开 nav -->
+      <span class="sess-badge" id="sess-badge" hidden></span>
+      <select id="project-select" title="当前项目空间（切换后进入对话页）"
+              style="font-size:12px;padding:3px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);max-width:220px;">
+        <option value="">加载项目…</option>
+      </select>
+      <a href="/config" class="user-settings-link" title="设置">⚙️</a>
+    </div>
+    {% endblock %}
+  </header>
+  {# 页面主体：默认 .main（顶栏下单列），对话页会输出自己的 .app-shell 三栏结构 #}
+  {% block body %}<main class="main">{% block content %}{% endblock %}</main>{% endblock %}
+  <script src="/static/js/app.js?v=proj15"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

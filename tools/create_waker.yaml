@@ -1,0 +1,76 @@
+name: create_waker
+description: >
+  创建一个数字员工（waker）草稿——固定为未启用状态。当用户表达
+  "定期/每天/每小时自动做某事"的意图时提议创建。
+  要求：先 list_wakers 查重名；name 只能含字母/数字/下划线/短横线
+  （1-64 字符，中文意图转成英文短横线名，如 daily-report）。
+  task_prompt 要写清四要素：检查什么、怎么处理、输出到哪、成功标准。
+  **permission_mode 必须判断**：waker 无人值守运行，若任务要写文件/执行
+  命令（如生成日报），before_changes 会卡在审批上导致每次运行失败——
+  此类任务必须传 full_access（并明确告知用户）；纯只读汇报类才用
+  before_changes。人格三文件（identity/persona/bible）可选，写法参考
+  create-waker 技能。创建后须向用户确认，再用 set_waker_enabled 启用。
+  详细的需求澄清清单与写作规范，先加载 create-waker 技能。
+
+parameters:
+  type: object
+  properties:
+    name:
+      type: string
+      description: 唯一标识（目录名）。^[a-zA-Z0-9_-]{1,64}$，如 daily-report。
+    description:
+      type: string
+      description: 一句话人类可读描述。
+    task_prompt:
+      type: string
+      description: 自动任务描述：检查范围、处理步骤、输出位置、成功标准。
+    schedule_type:
+      type: string
+      enum: [interval, daily, none]
+      description: interval=固定间隔；daily=每天固定时刻；none=仅手动触发。
+    interval_minutes:
+      type: integer
+      description: interval 模式的间隔分钟数（正整数）。
+    daily_at:
+      type: string
+      description: daily 模式的触发时刻，"HH:MM"（本地时区，如 "09:00"）。
+    identity:
+      type: string
+      description: 核心职责（IDENTITY.md），一两句话。
+    persona:
+      type: string
+      description: 工作风格（PERSONA.md），可选。
+    bible:
+      type: string
+      description: 工作准则/红线（BIBLE.md），可选。
+    working_dir:
+      type: string
+      description: 绑定的工作目录（相对 workspace 根，空=根）。通常留空。
+    permission_mode:
+      type: string
+      enum: [full_access, before_changes, plan]
+      description: >
+        权限模式。无人值守运行的 waker：任务要写文件/执行命令 → 必须传
+        full_access（否则每次运行卡审批而失败）；纯只读/搜索汇总类 →
+        before_changes。默认 before_changes。
+    max_runs:
+      type: integer
+      description: 最大运行次数，0=不限。默认 0。
+    expire_at:
+      type: string
+      description: ISO 过期时间（空=无截止）。通常留空。
+  required: [name, description, task_prompt, schedule_type]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.manage_waker
+  function: _execute_create_waker
+
+side_effects:
+  destructive: true           # before_changes 模式弹审批卡——LLM 起草、用户见全貌后确认
+  writes_state: true
+  network_access: false
+  spawns_process: false
+
+blocked_in: [employee, subagent]   # 数字员工/task 子代理不能造数字员工（防递归自增）

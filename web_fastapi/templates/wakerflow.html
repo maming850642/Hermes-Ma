@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+{% block title %}WakerFlow · Hermes-Ma{% endblock %}
+{% block content %}
+<style>
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.2rem 1rem; }
+  .form-grid label { margin: 0.5rem 0; }
+  .form-grid .full { grid-column: 1 / -1; }
+  .form-grid textarea { width: 100%; }
+  .yaml-editor {
+    width: 100%; min-height: 200px; font-family: "SF Mono", Consolas, monospace;
+    font-size: 0.82rem; line-height: 1.5; tab-size: 2;
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 0.8rem; white-space: pre; overflow-x: auto;
+  }
+  .yaml-editor:focus { outline: none; border-color: var(--accent); }
+  .flow-meta { font-size: 0.82rem; color: var(--text-secondary); margin: 0.4rem 0;
+    display: flex; gap: 0.6rem 1.2rem; flex-wrap: wrap; }
+  .flow-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.9rem; }
+  /* 运行中进度行 */
+  .flow-progress {
+    margin: 0.6rem 0; padding: 0.5rem 0.8rem; border-radius: 6px;
+    background: rgba(0,102,204,0.08); font-size: 0.85rem; font-weight: 500;
+    border-left: 3px solid var(--accent, #0066cc);
+  }
+
+  /* ===== 积木块编辑器 ===== */
+  .block-editor { border: 1px dashed var(--border); border-radius: var(--radius);
+    padding: 0.6rem; min-height: 80px; background: var(--bg); }
+  .block-editor:empty::before {
+    content: "👇 从下方添加步骤，或拖拽排序"; color: var(--text-secondary);
+    display: block; text-align: center; padding: 1.4rem; font-size: 0.85rem;
+  }
+  .block {
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    border-radius: var(--radius); margin-bottom: 0.6rem; position: relative;
+    box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.04));
+  }
+  .block[data-type="parallel"] { border-left: 3px solid #8e44ad; }
+  .block[data-type="pipeline"] { border-left: 3px solid #2980b9; }
+  .block[data-type="worker"]   { border-left: 3px solid #27ae60; }
+  .block[data-type="ask_user"] { border-left: 3px solid #f39c12; }
+  .block[data-type="action"]   { border-left: 3px solid #e67e22; }
+  .block-header {
+    display: flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.02);
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .block-handle { cursor: grab; color: var(--text-secondary); font-size: 1rem;
+    user-select: none; padding: 0 0.2rem; }
+  .block-handle:active { cursor: grabbing; }
+  .block-idx {
+    display: inline-block; min-width: 1.5rem; text-align: center;
+    background: var(--accent, #0066cc); color: #fff; border-radius: 999px;
+    font-size: 0.72rem; padding: 0.05rem 0.4rem; font-weight: 600;
+  }
+  .block-type {
+    font-weight: 600; font-size: 0.85rem; text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .block-id-hint { font-size: 0.78rem; color: var(--text-secondary); margin-left: auto; }
+  .block-actions { display: flex; gap: 0.2rem; }
+  .block-actions button {
+    background: none; border: none; cursor: pointer; color: var(--text-secondary);
+    font-size: 1rem; padding: 0.1rem 0.3rem; border-radius: 4px;
+  }
+  .block-actions button:hover { background: rgba(0,0,0,0.08); color: var(--text); }
+  .block-body { padding: 0.6rem 0.8rem; }
+  .block-body label { display: block; font-size: 0.78rem; color: var(--text-secondary); margin: 0.4rem 0 0.15rem; }
+  .block-body input[type="text"], .block-body textarea, .block-body select, .block-body input[type="number"] {
+    width: 100%; padding: 0.3rem 0.4rem; font-size: 0.85rem;
+    border: 1px solid var(--border); border-radius: 4px; background: var(--bg);
+  }
+  .block-body textarea { min-height: 50px; resize: vertical; font-family: inherit; }
+  .block-body input:focus, .block-body textarea:focus, .block-body select:focus {
+    outline: none; border-color: var(--accent);
+  }
+  .block-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 0.8rem; }
+  .block-children-container {
+    margin-top: 0.5rem; padding-left: 1rem;
+    border-left: 2px dotted var(--border);
+  }
+  .block-children-container:empty { display: none; }
+  .children-add-row { margin-top: 0.4rem; text-align: center; }
+  .children-add-row button { font-size: 0.78rem; }
+  /* 工具白名单 checkbox 列表 */
+  .tools-checkbox-list { display: grid; grid-template-columns: 1fr 1fr; gap: 0.2rem 0.8rem;
+    border: 1px solid var(--border); border-radius: 4px; padding: 0.4rem;
+    max-height: 120px; overflow-y: auto; background: var(--bg); }
+  .tools-checkbox-list label { display: flex; align-items: center; gap: 0.3rem; margin: 0;
+    font-size: 0.8rem; }
+  .tools-checkbox-list input[type="checkbox"] { width: auto; margin: 0; }
+  /* options 动态列表 */
+  .option-row { display: flex; gap: 0.3rem; margin-bottom: 0.25rem; align-items: center; }
+  .option-row input { flex: 1; padding: 0.2rem 0.3rem; font-size: 0.82rem;
+    border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
+  .option-row button { background: none; border: none; cursor: pointer; color: var(--danger, #c62828); }
+  /* Sortable 拖拽视觉 */
+  .sortable-ghost { opacity: 0.4; background: rgba(0,102,204,0.1) !important; }
+  .sortable-chosen { box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important; }
+  .sortable-drag { opacity: 0.95; }
+
+  /* 审批 badge */
+  .approval-badge {
+    display: inline-block; background: var(--danger, #e53935); color: #fff;
+    border-radius: 999px; padding: 0.1rem 0.6rem; font-size: 0.75rem;
+    margin-left: 0.5rem; cursor: pointer; font-weight: 600;
+  }
+  .approval-badge.empty { background: var(--text-secondary); cursor: default; opacity: 0.5; }
+  /* 日志抽屉 + 审批弹窗 */
+  .log-overlay, .approval-overlay, .yaml-overlay {
+    position: fixed; inset: 0; z-index: 300;
+    background: rgba(0,0,0,0.45);
+    display: flex; align-items: center; justify-content: center; padding: 2rem;
+  }
+  .log-box, .approval-box, .yaml-box {
+    background: var(--bg-elevated); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md); max-width: 100%;
+  }
+  .log-box { width: 960px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+  .log-header { display: flex; align-items: center; justify-content: space-between;
+    padding: 0.9rem 1.3rem; border-bottom: 1px solid var(--border); }
+  .log-body { padding: 0; overflow: hidden; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .log-body h4 { margin: 0.8rem 0 0.4rem; font-size: 0.9rem; color: var(--text-secondary); }
+  .log-body pre { white-space: pre-wrap; word-break: break-word; max-height: none; }
+  .run-table-wrap { flex: 0 0 auto; max-height: 36vh; overflow-y: auto; }
+  .run-table { margin: 0; box-shadow: none; border-radius: 0; }
+  .run-table th, .run-table td { padding: 0.55rem 0.9rem; font-size: 0.84rem; white-space: nowrap; }
+  .run-table tbody tr { cursor: pointer; }
+  .run-table tbody tr:hover { background: var(--surface); }
+  .run-table tbody tr.selected { background: var(--accent-soft); }
+  .run-table .rid { font-family: "SF Mono", Consolas, monospace; font-size: 0.76rem;
+    color: var(--text-secondary); }
+  .run-table td.hint { white-space: normal; cursor: default; }
+  .badge-blue { background: #d6e8fb; color: #0b5cad; }
+  .badge-red { background: #fde0e0; color: #b3282d; }
+  .run-detail { flex: 1 1 auto; min-height: 200px; overflow: hidden; display: flex; flex-direction: column;
+    border-top: 1px solid var(--border); }
+  .run-detail-head { display: flex; gap: 0.35rem; padding: 0.55rem 1.1rem 0.25rem; align-items: center; }
+  .run-tab { background: none; border: none; padding: 0.32rem 0.75rem; border-radius: 980px;
+    font-size: 0.82rem; color: var(--text-secondary); cursor: pointer; }
+  .run-tab:hover { background: var(--surface); color: var(--text); }
+  .run-tab.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .run-detail-body { flex: 1; overflow-y: auto; padding: 0.55rem 1.2rem 1.1rem; }
+  .run-detail-body .md-body { font-size: 0.88rem; line-height: 1.65; }
+  .run-detail-body .md-body h1, .run-detail-body .md-body h2, .run-detail-body .md-body h3 {
+    font-size: 1rem; margin: 0.8em 0 0.35em; }
+  .run-event-line { font-family: "SF Mono", Consolas, monospace; font-size: 0.78rem;
+    padding: 0.28rem 0; border-bottom: 1px solid var(--border); color: var(--text); }
+  .run-event-line .ts { color: var(--text-secondary); margin-right: 0.6rem; }
+  .approval-box { width: 680px; padding: 1.5rem; }
+  .approval-box .q { font-size: 1.05rem; margin: 0.8rem 0 1.2rem; }
+  .approval-box .opts { display: flex; flex-direction: column; gap: 0.5rem; }
+  .approval-box .opt-btn { text-align: left; padding: 0.7rem 1rem; }
+  .yaml-box { width: 720px; max-height: 85vh; display: flex; flex-direction: column; }
+  .yaml-box textarea { flex: 1; min-height: 320px; }
+  .validation-msg { font-size: 0.82rem; margin: 0.5rem 0; padding: 0.5rem 0.8rem;
+    border-radius: var(--radius); }
+  .validation-msg.ok { background: rgba(76,175,80,0.12); color: #2e7d32; }
+  .validation-msg.err { background: rgba(229,57,53,0.12); color: #c62828; white-space: pre-wrap; }
+</style>
+
+<div class="page-wrap">
+  <h2>🔀 WakerFlow
+    <span class="hint" style="font-size:0.85rem;font-weight:400;">拖拽编排多 waker 协作</span>
+    <span id="approval-badge" class="approval-badge empty" onclick="showApprovals()" title="待审批">审批 0</span>
+  </h2>
+  <p class="hint">拖拽积木块搭建工作流：worker 派活、parallel 并发、pipeline 串行、ask_user 人工确认、action 调接口。无需写 YAML。</p>
+
+  <div style="display:flex; gap:0.6rem; flex-wrap:wrap; margin: 1rem 0;">
+    <button onclick="openCreateForm()" class="btn-primary">＋ 新建 Flow</button>
+    <button onclick="loadFlows()" class="btn-small">刷新</button>
+    <button onclick="loadApprovals()" class="btn-small">刷新审批</button>
+  </div>
+
+  <!-- 积木块编辑器（默认隐藏，点新建/编辑才显示） -->
+  <div id="flow-form-details" class="card" style="margin-top:1.2rem;display:none;">
+    <div style="margin-bottom:0.8rem;">
+      <strong>🧱 Flow 编辑器</strong>
+    </div>
+    <div style="margin-top:1rem;">
+      <div class="block-row" style="grid-template-columns: 1fr 2fr; gap:0.6rem; margin-bottom:0.6rem;">
+        <div>
+          <label style="font-size:0.78rem;color:var(--text-secondary);">名称 <span class="hint">（新建必填，编辑只读）</span></label>
+          <input id="f-name" placeholder="如：code-review-flow" style="width:100%;padding:0.3rem 0.4rem;font-size:0.85rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);">
+        </div>
+        <div>
+          <label style="font-size:0.78rem;color:var(--text-secondary);">描述</label>
+          <input id="f-description" placeholder="这个 flow 做什么..." style="width:100%;padding:0.3rem 0.4rem;font-size:0.85rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);">
+        </div>
+      </div>
+
+      <label style="font-size:0.78rem;color:var(--text-secondary);display:block;margin:0.6rem 0 0.3rem;">⚙️ 调度 <span class="hint">（可选，让 flow 自动定时运行）</span></label>
+      <div style="display:grid;grid-template-columns:auto auto 1fr 1fr;gap:0.3rem 0.8rem;align-items:center;margin-bottom:0.4rem;padding:0.5rem;border:1px solid var(--border);border-radius:6px;background:var(--bg);">
+        <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;margin:0;">
+          <input id="f-enabled" type="checkbox" style="width:auto;" checked> 启用
+        </label>
+        <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;margin:0;">
+          调度
+          <select id="f-schedule_type" onchange="onScheduleChange()" style="padding:0.15rem;font-size:0.82rem;">
+            <option value="none">手动</option>
+            <option value="interval">周期</option>
+            <option value="daily">每天</option>
+          </select>
+        </label>
+        <div id="f-interval-wrap" style="display:none;">
+          <label style="font-size:0.78rem;margin:0;">每
+            <input id="f-interval_minutes" type="number" min="1" value="60" style="width:4rem;padding:0.15rem;font-size:0.82rem;"> 分钟
+          </label>
+        </div>
+        <div id="f-daily-wrap" style="display:none;">
+          <label style="font-size:0.78rem;margin:0;">每天
+            <input id="f-daily_at" type="time" value="09:00" style="padding:0.15rem;font-size:0.82rem;">
+          </label>
+        </div>
+        <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;margin:0;">
+          最大运行次数
+          <input id="f-max_runs" type="number" min="0" value="0" style="width:4rem;padding:0.15rem;font-size:0.82rem;" title="0=不限">
+        </label>
+        <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;margin:0;">
+          过期时间
+          <input id="f-expire_at" type="datetime-local" style="padding:0.15rem;font-size:0.82rem;">
+        </label>
+        <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.82rem;margin:0;">
+          <input id="f-api_enabled" type="checkbox" style="width:auto;"> 允许 API 触发
+        </label>
+      </div>
+
+      <label style="font-size:0.78rem;color:var(--text-secondary);display:block;margin-bottom:0.3rem;">输入参数 <span class="hint">（可选，flow 运行时填写）</span></label>
+      <div id="f-inputs-list" style="margin-bottom:0.6rem;"></div>
+      <button onclick="addInputField()" class="btn-small" style="font-size:0.78rem;">＋ 添加输入</button>
+
+      <hr style="margin:0.8rem 0;border:none;border-top:1px solid var(--border);">
+
+      <label style="font-size:0.78rem;color:var(--text-secondary);display:block;margin-bottom:0.3rem;">步骤 <span class="hint">（拖动 ☰ 排序，块顺序 = 执行顺序）</span></label>
+      <div id="blocks-list" class="block-editor"></div>
+
+      <!-- 添加步骤菜单 -->
+      <div style="margin-top:0.6rem; display:flex; gap:0.4rem; flex-wrap:wrap; align-items:center;">
+        <span class="hint" style="font-size:0.8rem;">添加步骤：</span>
+        <button onclick="addBlock('worker')" class="btn-small" style="font-size:0.8rem;border-left:3px solid #27ae60;">worker</button>
+        <button onclick="addBlock('parallel')" class="btn-small" style="font-size:0.8rem;border-left:3px solid #8e44ad;">parallel</button>
+        <button onclick="addBlock('pipeline')" class="btn-small" style="font-size:0.8rem;border-left:3px solid #2980b9;">pipeline</button>
+        <button onclick="addBlock('ask_user')" class="btn-small" style="font-size:0.8rem;border-left:3px solid #f39c12;">ask_user</button>
+        <button onclick="addBlock('action')" class="btn-small" style="font-size:0.8rem;border-left:3px solid #e67e22;">action</button>
+      </div>
+
+      <hr style="margin:0.8rem 0;border:none;border-top:1px solid var(--border);">
+
+      <div id="validation-msg" class="validation-msg" style="display:none;"></div>
+      <div style="margin-top:0.6rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <button onclick="saveFlow()" class="btn-primary">💾 保存</button>
+        <button onclick="runEditingFlow()" class="btn-small">▶ 保存并运行</button>
+        <button onclick="exportYaml()" class="btn-small">📄 导出 YAML</button>
+        <button onclick="showImportYaml()" class="btn-small">📥 从 YAML 导入</button>
+        <button onclick="closeForm()" class="btn-small">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Flow 列表 -->
+  <div id="flow-list" style="margin-top:1.4rem;">
+    <p class="hint">加载中...</p>
+  </div>
+</div>
+
+<!-- 运行记录抽屉：上表下详情 -->
+<div id="log-overlay" class="log-overlay" style="display:none;">
+  <div class="log-box">
+    <div class="log-header">
+      <strong>运行记录：<span id="log-flow-name"></span></strong>
+      <button type="button" onclick="closeLog()" class="btn-small">✕ 关闭</button>
+    </div>
+    <div class="log-body">
+      <div class="run-table-wrap">
+        <table class="run-table">
+          <thead>
+            <tr>
+              <th>状态</th>
+              <th>开始时间</th>
+              <th>结束时间</th>
+              <th>耗时</th>
+              <th>run_id</th>
+            </tr>
+          </thead>
+          <tbody id="run-table-body">
+            <tr><td colspan="5" class="hint">加载中……</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="run-detail" id="run-detail">
+        <div class="run-detail-head">
+          <button type="button" class="run-tab active" data-tab="result">结果</button>
+          <button type="button" class="run-tab" data-tab="events">事件流</button>
+          <span id="run-detail-meta" class="hint" style="margin:0 0 0 auto;"></span>
+        </div>
+        <div class="run-detail-body" id="run-detail-result"><p class="hint">点选上方一条记录查看详情</p></div>
+        <div class="run-detail-body" id="run-detail-events" style="display:none;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 审批弹窗 -->
+<div id="approval-overlay" class="approval-overlay" style="display:none;">
+  <div class="approval-box" style="max-height:88vh;display:flex;flex-direction:column;">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <strong>🟡 待审批</strong>
+      <button onclick="closeApproval()" class="btn-small">✕ 关闭</button>
+    </div>
+    <div id="approval-list" style="margin-top:1rem;overflow-y:auto;flex:1;"></div>
+  </div>
+</div>
+
+
+<!-- YAML 导入弹窗 -->
+<div id="yaml-overlay" class="yaml-overlay" style="display:none;">
+  <div class="yaml-box">
+    <div class="log-header">
+      <strong>📥 从 YAML 导入</strong>
+      <button onclick="closeYamlOverlay()" class="btn-small">✕</button>
+    </div>
+    <div style="padding:1rem 1.3rem; display:flex; flex-direction:column; gap:0.5rem; flex:1; overflow:hidden;">
+      <p class="hint">粘贴 YAML 文本，解析后会还原成积木块（名称/描述/步骤/输入/返回都会还原）。</p>
+      <textarea id="yaml-import-text" class="yaml-editor" spellcheck="false" placeholder="name: my-flow&#10;steps:&#10;  - id: step1&#10;    worker: some-waker&#10;    task: do something"></textarea>
+      <div id="yaml-import-msg" class="validation-msg" style="display:none;"></div>
+      <button onclick="doImportYaml()" class="btn-primary">导入</button>
+    </div>
+  </div>
+</div>
+
+<!-- 运行参数收集弹窗 -->
+<div id="run-inputs-overlay" class="yaml-overlay" style="display:none;">
+  <div class="yaml-box" style="width:520px;">
+    <div class="log-header">
+      <strong>▶ 运行 Flow：<span id="run-inputs-name"></span></strong>
+      <button onclick="closeRunInputs()" class="btn-small">✕</button>
+    </div>
+    <div style="padding:1rem 1.3rem; display:flex; flex-direction:column; gap:0.6rem;">
+      <div id="run-inputs-fields"></div>
+      <div class="hint" style="text-align:center;">flow 在后台异步运行，不影响你的 chat。</div>
+      <button onclick="doRunWithInputs()" class="btn-primary">▶ 开始运行</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/vendor/Sortable.min.js"></script>
+<script src="/static/js/wakerflow.js?v=wfext01"></script>
+{% endblock %}

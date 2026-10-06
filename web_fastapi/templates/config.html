@@ -1,0 +1,538 @@
+{% extends "base.html" %}
+{% block title %}设置 · Hermes-Ma{% endblock %}
+{% block content %}
+<div class="page-wrap">
+  <h2>⚙️ 设置</h2>
+
+  {# ══════════ 2026-09-05 分组重设计（全键热生效修订版） ══════════
+     分组与可写性对齐 config_service.classify_keys + config_router._RESTART_KEYS：
+     - 个人偏好       → GET/PUT /api/config/prefs（5 键，即时生效）
+     - 工作区与网络   → prefs API 写入，但 workspace_root（挂载语义）/
+                        web_proxy（客户端构造期固化）需重启 → 需重启徽标
+     - 模型           → PUT /api/config/system 模型三项（即时下发）
+     - 运行参数       → PUT /api/config/system 白名单键，经 settings_update
+                        广播即时生效；白名单外只读展示
+     - 子代理与工具   → shell_* / self_evolve_enabled 白名单键同上（即时生效）
+     - 其余键         → 「高级」折叠组，纯只读
+     每张可保存卡片一个提交按钮，保存后展示 PUT 响应的
+     applied_immediately / restart_required_keys / skipped_masked / rejected。 #}
+
+  <!-- 🧑 个人偏好：全部即时生效 -->
+  <section class="card">
+    <h3>🧑 个人偏好 <span class="badge badge-green">即时生效</span></h3>
+    <p class="hint">按用户生效的运行偏好，保存后立即应用于所有会话，无需重启。</p>
+    <form id="prefs-form" data-cfg="prefs" data-result="prefs-result">
+      <div class="cfg-grid">
+        <div class="cfg-field">
+          <label class="cfg-label" for="pf-temperature">采样温度 <code class="cfg-key">temperature</code></label>
+          <input id="pf-temperature" name="temperature" data-cfg-key="temperature" type="number" step="0.1" min="0" placeholder="0.7">
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label" for="pf-max-tokens">回复上限（tokens） <code class="cfg-key">max_tokens</code></label>
+          <input id="pf-max-tokens" name="max_tokens" data-cfg-key="max_tokens" type="number" step="1" min="1" placeholder="20000">
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label" for="pf-memory-results">记忆返回条数 <code class="cfg-key">max_memory_results</code></label>
+          <input id="pf-memory-results" name="max_memory_results" data-cfg-key="max_memory_results" type="number" step="1" min="1" placeholder="5">
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label" for="pf-compact-pct">自动压缩阈值（%） <code class="cfg-key">compact_threshold_pct</code></label>
+          <input id="pf-compact-pct" name="compact_threshold_pct" data-cfg-key="compact_threshold_pct" type="number" min="0" max="100" step="1" placeholder="80">
+          <small class="cfg-hint">token 占用达窗口 N% 时自动压缩；0=关闭。</small>
+        </div>
+      </div>
+      <div class="cfg-card-actions">
+        <button type="submit" class="btn-primary">保存偏好</button>
+      </div>
+      <div id="prefs-result" class="cfg-result"></div>
+    </form>
+  </section>
+
+  <!-- 🌐 工作区与网络：仍走 prefs API 写入，但挂载/客户端构造语义决定需重启 -->
+  <section class="card">
+    <h3>🌐 工作区与网络 <span class="badge badge-orange">需重启生效</span></h3>
+    <p class="hint">这两项写入用户偏好并持久化；因挂载语义（workspace_root）与客户端构造期固化（web_proxy），需重启服务后才真正生效。</p>
+    <form id="work-form" data-cfg="prefs" data-restart="1" data-result="work-result">
+      <div class="cfg-grid">
+        <div class="cfg-field">
+          <label class="cfg-label" for="wf-workspace-root">工作区根目录 <code class="cfg-key">workspace_root</code></label>
+          <input id="wf-workspace-root" name="workspace_root" data-cfg-key="workspace_root" type="text" placeholder="留空=虚拟FS">
+          <small class="cfg-hint">Agent 可访问的文件系统根目录；留空使用内置虚拟文件系统。</small>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label" for="wf-web-proxy">网络代理 <code class="cfg-key">web_proxy</code></label>
+          <input id="wf-web-proxy" name="web_proxy" data-cfg-key="web_proxy" type="password" autocomplete="off" placeholder="留空=直连">
+          <small class="cfg-hint">web_search / web_fetch 走的代理 URL（如 http://127.0.0.1:7890），留空直连。</small>
+        </div>
+      </div>
+      <div class="cfg-card-actions">
+        <button type="submit" class="btn-primary">保存</button>
+      </div>
+      <div id="work-result" class="cfg-result"></div>
+    </form>
+  </section>
+
+  <!-- 🤖 模型：模型三项经 reload_settings + 广播即时生效 -->
+  <section class="card">
+    <h3>🤖 模型 <span class="badge badge-green">即时生效</span></h3>
+    <p class="hint">改动保存后立即下发到所有会话，下一轮对话生效，无需重启。</p>
+    <form id="model-form" data-cfg="model">
+      <div class="cfg-grid">
+        <div class="cfg-field">
+          <label class="cfg-label" for="mf-model-name">模型名称 <code class="cfg-key">llm_model_name</code></label>
+          <input id="mf-model-name" name="llm_model_name" data-cfg-key="llm_model_name" type="text">
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label" for="mf-base-url">API Base URL <code class="cfg-key">openai_base_url</code></label>
+          <input id="mf-base-url" name="openai_base_url" data-cfg-key="openai_base_url" type="text" placeholder="https://open.bigmodel.cn/api/paas/v4">
+        </div>
+        <div class="cfg-field cfg-field--wide">
+          <label class="cfg-label" for="mf-api-key">API Key <code class="cfg-key">openai_api_key</code></label>
+          <input id="mf-api-key" name="openai_api_key" data-cfg-key="openai_api_key" type="password" autocomplete="new-password">
+          <small class="cfg-hint">已掩码回显：原样保存 = 不修改（含 * 的值后端自动跳过）；填入新值 = 替换；清空 = 清除该 Key。</small>
+        </div>
+      </div>
+      <div class="cfg-card-actions">
+        <button type="submit" class="btn-primary">保存模型配置</button>
+      </div>
+      <div id="model-result" class="cfg-result"></div>
+    </form>
+  </section>
+
+  <!-- ⚙️ 运行参数：白名单键热同步；白名单外（消息数/迭代/compact 系）只读 -->
+  <section class="card">
+    <h3>⚙️ 运行参数 <span class="badge badge-green">即时生效</span></h3>
+    <p class="hint">可编辑项保存后写盘并同步到所有会话内存态，下一轮对话即生效，无需重启。虚线灰底项为只读展示（后端不接受网页写入），如需修改请直接编辑 config.yaml。</p>
+    <form id="runtime-form" data-cfg="runtime">
+      <div class="cfg-grid">
+        <div class="cfg-field">
+          <label class="cfg-label" for="rf-llm-timeout">LLM 超时（秒） <code class="cfg-key">llm_timeout</code></label>
+          <input id="rf-llm-timeout" name="llm_timeout" data-cfg-key="llm_timeout" type="number" step="1" min="0">
+          <small class="cfg-hint">单次请求/流式超时；0=不限。</small>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label" for="rf-context-window">上下文窗口（tokens） <code class="cfg-key">model_context_window</code></label>
+          <input id="rf-context-window" name="model_context_window" data-cfg-key="model_context_window" type="number" step="1" min="0">
+          <small class="cfg-hint">0=自动探测；改模型时建议一并修改，token 压缩阈值才算得准。</small>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label">短期记忆轮数 <code class="cfg-key">max_short_term_messages</code></label>
+          <input type="number" class="cfg-ro" data-cfg-key="max_short_term_messages" readonly>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label">Agent 最大迭代 <code class="cfg-key">max_agent_iterations</code></label>
+          <input type="number" class="cfg-ro" data-cfg-key="max_agent_iterations" readonly>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label">工具死循环阈值 <code class="cfg-key">tool_loop_threshold</code></label>
+          <input type="number" class="cfg-ro" data-cfg-key="tool_loop_threshold" readonly>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label">压缩保留最近消息 <code class="cfg-key">compact_keep_recent</code></label>
+          <input type="number" class="cfg-ro" data-cfg-key="compact_keep_recent" readonly>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label">压缩触发最小消息数 <code class="cfg-key">compact_min_messages</code></label>
+          <input type="number" class="cfg-ro" data-cfg-key="compact_min_messages" readonly>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label">压缩摘要上限（tokens） <code class="cfg-key">compact_summary_max_tokens</code></label>
+          <input type="number" class="cfg-ro" data-cfg-key="compact_summary_max_tokens" readonly>
+        </div>
+      </div>
+      <div class="cfg-card-actions">
+        <button type="submit" class="btn-primary">保存运行参数</button>
+      </div>
+      <div id="runtime-result" class="cfg-result"></div>
+    </form>
+  </section>
+
+  <!-- 🧩 子代理与工具：shell_* 白名单键热同步；sub_agent_* 只读 -->
+  <section class="card">
+    <h3>🧩 子代理与工具 <span class="badge badge-green">即时生效</span></h3>
+    <p class="hint">可编辑项保存后写盘并同步到所有会话内存态，下一轮对话即生效，无需重启。子代理（sub_agent_*）为只读展示。</p>
+    <form id="tools-form" data-cfg="tools">
+      <div class="cfg-grid">
+        <div class="cfg-field cfg-field--wide">
+          <div class="cfg-bool-row">
+            <div>
+              <label class="cfg-label" for="tf-shell-enabled">Shell 执行器 <code class="cfg-key">shell_enabled</code></label>
+              <small class="cfg-hint">总开关：bash 工具的可见性（文件工具已退役，bash 是唯一文件通道，建议开启）。白名单自动放行，其余命令转人工审批。</small>
+            </div>
+            <label class="cfg-switch">
+              <input type="checkbox" id="tf-shell-enabled" name="shell_enabled" data-cfg-key="shell_enabled" data-cfg-warn="shell-warn">
+              <span class="cfg-track"></span>
+            </label>
+          </div>
+          <div id="shell-warn" class="cfg-warn" hidden>
+            ⚠️ shell_enabled 的改动会立即下发到所有会话（工具面随开关出现/消失）；
+            放开 shell 允许在 workspace 内执行命令，有安全含义（纵深防御而非完备沙箱）——
+            请确认下方白名单 / 黑名单配置充分后再开启。
+          </div>
+        </div>
+        <div class="cfg-field cfg-field--wide">
+          <label class="cfg-label" for="tf-shell-allowed">白名单命令 <code class="cfg-key">shell_allowed_commands</code></label>
+          <input id="tf-shell-allowed" name="shell_allowed_commands" data-cfg-key="shell_allowed_commands" type="text">
+          <small class="cfg-hint">逗号分隔；只读/查询类命令自动放行（git 仅放行只读子命令）。</small>
+        </div>
+        <div class="cfg-field cfg-field--wide">
+          <label class="cfg-label" for="tf-shell-blocked">危险模式黑名单 <code class="cfg-key">shell_blocked_patterns</code></label>
+          <input id="tf-shell-blocked" name="shell_blocked_patterns" data-cfg-key="shell_blocked_patterns" type="text">
+          <small class="cfg-hint">用 <code>;;</code> 分隔（部分模式含逗号）；与内置默认黑名单叠加生效。</small>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label" for="tf-shell-timeout">Shell 超时（秒） <code class="cfg-key">shell_timeout</code></label>
+          <input id="tf-shell-timeout" name="shell_timeout" data-cfg-key="shell_timeout" type="number" step="1" min="0">
+          <small class="cfg-hint">单次执行硬超时；0=不限。</small>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label" for="tf-shell-max-chars">输出截断（字符） <code class="cfg-key">shell_max_output_chars</code></label>
+          <input id="tf-shell-max-chars" name="shell_max_output_chars" data-cfg-key="shell_max_output_chars" type="number" step="1" min="0">
+        </div>
+        <div class="cfg-field cfg-field--wide">
+          <div class="cfg-bool-row">
+            <div>
+              <label class="cfg-label" for="tf-self-evolve-enabled">自进化工具面 <code class="cfg-key">self_evolve_enabled</code></label>
+              <small class="cfg-hint">总开关：self_backup / verify_self / respawn_self 三件工具的可见性。出厂默认关闭；写仓库路径的 bash 命令仍一律人工审批（护栏不随开关变化）。</small>
+            </div>
+            <label class="cfg-switch">
+              <input type="checkbox" id="tf-self-evolve-enabled" name="self_evolve_enabled" data-cfg-key="self_evolve_enabled" data-cfg-warn="self-evolve-warn">
+              <span class="cfg-track"></span>
+            </label>
+          </div>
+          <div id="self-evolve-warn" class="cfg-warn" hidden>
+            ⚠️ self_evolve_enabled 的改动会立即下发到所有会话（工具面随开关出现/消失）；
+            开启即允许 agent 在对话中修改本仓库源码并触发 worker 重生，有安全含义——
+            仅建议在你信任的开发环境开启。
+          </div>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label">子代理嵌套深度 <code class="cfg-key">sub_agent_max_depth</code></label>
+          <input type="number" class="cfg-ro" data-cfg-key="sub_agent_max_depth" readonly>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label">子代理超时（秒） <code class="cfg-key">sub_agent_default_timeout</code></label>
+          <input type="number" class="cfg-ro" data-cfg-key="sub_agent_default_timeout" readonly>
+        </div>
+        <div class="cfg-field">
+          <label class="cfg-label">子代理 tokens 上限 <code class="cfg-key">sub_agent_default_max_tokens</code></label>
+          <input type="number" class="cfg-ro" data-cfg-key="sub_agent_default_max_tokens" readonly>
+        </div>
+      </div>
+      <div class="cfg-card-actions">
+        <button type="submit" class="btn-primary">保存工具配置</button>
+      </div>
+      <div id="tools-result" class="cfg-result"></div>
+    </form>
+  </section>
+
+  <!-- 📦 模型档案：独立 REST /api/models，逻辑在 app.js「设置页：模型档案管理」段 -->
+  <section class="card">
+    <h3>📦 模型档案 <span class="badge badge-green">即时生效</span>
+      <button type="button" id="mp-add" class="btn-small" style="margin-left:auto">＋ 新增档案</button></h3>
+    <p class="hint">对话页「模型」下拉的档案来源（名称前的圆点 = API Key 已配置）。
+      默认模型仍取上方「🤖 模型」卡片；切换档案即时生效、下一轮对话使用。</p>
+    <div id="mp-list"></div>
+  </section>
+
+  <!-- 🔧 高级：config.yaml 其余键（后端白名单外一律拒写），纯只读折叠组 -->
+  <section class="card">
+    <h3>🔧 高级 <span class="badge">只读</span></h3>
+    <p class="hint">以下 config.yaml 键不接受网页写入（写入白名单外的键会被后端拒绝），如需修改请直接编辑 config.yaml 并重启服务。</p>
+    <details class="cfg-advanced">
+      <summary>展开其他配置键（<span id="adv-count">0</span> 个）</summary>
+      <div id="adv-fields" class="cfg-grid"></div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h3>MCP 服务 <span class="badge badge-green">热加载</span></h3>
+    <p class="hint">每个服务一个 json 文件(mcp_servers/)。粘贴配置后点「添加」即时生效,无需重启。</p>
+    <div id="mcp-list"></div>
+    <details class="mcp-add-form">
+      <summary>＋ 添加 MCP 服务</summary>
+      <form id="mcp-form" style="margin-top:0.6rem">
+        <p class="hint">粘贴单个服务的 JSON(键名=服务名):</p>
+        <textarea id="mcp-json-input" rows="10" placeholder='{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["chrome-devtools-mcp@latest"]
+    }
+  }
+}' style="width:100%;font-family:monospace;font-size:0.85rem;padding:0.6rem;border-radius:8px;border:1px solid var(--border);background:var(--surface)"></textarea>
+        <button type="submit" class="btn-primary" style="margin-top:0.5rem">添加</button>
+      </form>
+    </details>
+    <button onclick="reloadMcp()" class="btn-primary" style="margin-top:0.6rem">🔄 重新加载</button>
+  </section>
+  <section class="card">
+    <h3>健康自检</h3>
+    <button onclick="checkHealth()" class="btn-primary">🔍 检查</button>
+    <pre id="health-out"></pre>
+  </section>
+  <!-- 📊 统计：只读快照（GET /api/stats），结构照「模型档案」卡（容器 + JS 填充） -->
+  <section class="card">
+    <h3>📊 统计 <span class="badge">只读</span>
+      <button type="button" id="stats-refresh" class="btn-small" style="margin-left:auto">🔄 刷新</button></h3>
+    <p class="hint">运行统计快照（/api/stats）：会话、LLM 错误、存储行数与数字员工概览。</p>
+    <div id="stats-list"></div>
+  </section>
+</div>
+<!-- 模型档案 新增/编辑弹窗（原生 dialog，主题复用 main.css 的 .dlg；
+     逻辑在 app.js 的「设置页：模型档案管理」段，模板零内联脚本） -->
+<dialog id="mp-dialog" class="dlg mp-dlg">
+  <h3 id="mp-dialog-title">新增模型档案</h3>
+  <form id="mp-form">
+    <label>显示名 <input type="text" id="mp-display" placeholder="例如：GLM-4.7" required></label>
+    <label>模型 ID <input type="text" id="mp-model" placeholder="例如：glm-4.7" required></label>
+    <label>Base URL <input type="text" id="mp-base-url" placeholder="例如：https://open.bigmodel.cn/api/paas/v4" required></label>
+    <label>API Key <input type="password" id="mp-api-key" autocomplete="new-password" placeholder="sk-…">
+      <small>编辑时留空 = 不修改已保存的 Key</small></label>
+    <label>上下文窗口 <input type="number" id="mp-context" min="1" step="1" placeholder="可空，单位 tokens">
+      <small>留空使用后端默认值</small></label>
+    <div class="dlg-actions">
+      <button type="button" id="mp-cancel">取消</button>
+      <button type="submit" class="btn-primary">保存</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}
+{% block scripts %}
+<script>
+// P2-24：全字符集转义（与 memory.html:167 同版）。系统配置键值与 MCP 服务名
+// 均为用户可控内容（config.yaml 手编 / 粘贴 MCP JSON），拼进 innerHTML 前
+// 必须转义——属性位防引号闭合注入，内容位防标签注入。
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// ---- 🧑 个人偏好（GET/PUT /api/config/prefs）----
+// 两张卡片走 prefs API：个人偏好（即时）+ 工作区与网络（data-restart，需重启）
+async function loadPrefs(){ const r=await fetch('/api/config/prefs'); const {prefs}=await r.json();
+  for(const [k,v] of Object.entries(prefs||{})){ const el=document.querySelector(`form[data-cfg="prefs"] [name=${k}]`); if(el) el.value=v; } }
+
+// ---- 系统配置（GET/PUT /api/config/system），分组卡片 ----
+// 可写性对齐 config_service.classify_keys：仅白名单键接受网页写入，
+// 其余键只读展示（data-cfg-key 无 name，不会进提交体）。
+const CFG_PREFS_KEYS = new Set(['workspace_root','web_proxy','temperature','max_tokens',
+  'memory_min_score','max_memory_results','compact_threshold_pct']);
+
+// 标量→文本：dict/list（如 waker 段）转 JSON，其余 String()；null/undefined → 空串
+function scalarToText(v){
+  if(v===null||v===undefined) return '';
+  return (typeof v==='object') ? JSON.stringify(v) : String(v);
+}
+
+async function loadSystemConfig(){
+  const r=await fetch('/api/config/system'); const {config}=await r.json();
+  fillSystemFields(config||{});
+  renderAdvanced(config||{});
+}
+// 回填三张系统卡：可写键带 name（FormData 收集），只读键仅 data-cfg-key（纯展示）。
+// 布尔回显兼容 true/'true'/'1'/1——开关保存值是 '1'/'0' 字符串（见 collectFormUpdates）
+function fillSystemFields(config){
+  document.querySelectorAll('[data-cfg-key]').forEach(el=>{
+    const k=el.dataset.cfgKey;
+    if(!(k in config)) return;
+    if(el.type==='checkbox'){ el.checked=(config[k]===true||config[k]==='true'||config[k]==='1'||config[k]===1); }
+    else el.value=scalarToText(config[k]);
+  });
+}
+// 高级组：不属于三张系统卡、也不属于偏好的键 → 只读折叠展示（布尔渲染成禁用开关）
+function renderAdvanced(config){
+  const claimed=new Set();
+  document.querySelectorAll('#model-form [name],#runtime-form [name],#tools-form [name]').forEach(el=>claimed.add(el.name));
+  document.querySelectorAll('[data-cfg-key]').forEach(el=>claimed.add(el.dataset.cfgKey));
+  const rows=[];
+  for(const [k,v] of Object.entries(config)){
+    if(claimed.has(k)||CFG_PREFS_KEYS.has(k)) continue;
+    const hint='<small class="cfg-hint">只读 · 如需修改请直接编辑 config.yaml（改后重启）</small>';
+    if(v===true||v===false||v==='true'||v==='false'||v===1||v===0||v==='1'||v==='0'){
+      const on=(v===true||v==='true'||v===1||v==='1')?' checked':'';
+      rows.push(`<div class="cfg-field"><label class="cfg-label">${escapeHtml(k)}</label>`+
+        `<label class="cfg-switch"><input type="checkbox" disabled${on}><span class="cfg-track"></span></label>`+hint+'</div>');
+    }else{
+      rows.push(`<div class="cfg-field"><label class="cfg-label">${escapeHtml(k)}</label>`+
+        `<input type="text" class="cfg-ro" readonly value="${escapeHtml(scalarToText(v))}">`+hint+'</div>');
+    }
+  }
+  document.getElementById('adv-count').textContent=rows.length;
+  document.getElementById('adv-fields').innerHTML=rows.length?rows.join(''):'<p class="hint">没有更多配置键。</p>';
+}
+// 收集卡片提交体。系统卡：全部按字符串提交（后端 updates: dict[str,str]；
+// 数值键读取侧 config.py._INT_KEYS 会强转 int）。布尔开关特例：提交
+// '1'/'0' 而非 'true'/'false'——settings_update 广播与 config.yaml 重启
+// 读取两条路径都按 Python 真值消费 shell_enabled，字符串 'false' 是真值
+// 会把「关闭」静默变成「开启」；'0' 为假 / '1' 为真，两条路径都正确。
+function collectFormUpdates(form){
+  const updates={};
+  form.querySelectorAll('[name]').forEach(el=>{
+    updates[el.name]= el.type==='checkbox' ? (el.checked?'1':'0') : el.value;
+  });
+  return updates;
+}
+function showCfgResult(id,lines){ const el=document.getElementById(id); if(el) el.innerHTML=lines.join(''); }
+// PUT /system 响应四态 → 结果行（键名均经 escapeHtml）
+function systemResultLines(j){
+  const escList=a=>(a||[]).map(escapeHtml).join('、');
+  const lines=[];
+  if((j.applied_immediately||[]).length) lines.push(`<div class="r-ok">⚡ 已即时生效（下发到所有会话，下一轮对话使用）：${escList(j.applied_immediately)}</div>`);
+  if((j.restart_required_keys||[]).length) lines.push(`<div class="r-restart">🔄 以下设置需重启生效：${escList(j.restart_required_keys)}</div>`);
+  if((j.skipped_masked||[]).length) lines.push(`<div class="r-skip">🔑 掩码键原样回传，已跳过（保持原值不变）：${escList(j.skipped_masked)}</div>`);
+  if((j.rejected||[]).length) lines.push(`<div class="r-reject">⛔ 以下键不接受网页写入（只读），已忽略：${escList(j.rejected)}</div>`);
+  if(!lines.length) lines.push('<div class="r-skip">未变更任何键。</div>');
+  return lines;
+}
+// 事件委托：data-cfg 表单共用一个提交入口（prefs→prefs API；其余→system API）。
+// mcp-form / mp-form 无 data-cfg，由各自既有监听器处理，此处直接放行。
+document.addEventListener('submit', async(e)=>{
+  const form=e.target.closest('form[data-cfg]');
+  if(!form) return;
+  e.preventDefault();
+  const kind=form.dataset.cfg;
+  try{
+    if(kind==='prefs'){
+      const body=Object.fromEntries(new FormData(form).entries());
+      // W4/M13：空串不再被 +'' 强转为 0（清空 workspace_root/web_proxy=恢复默认）
+      for(const k in body){ body[k]=(body[k]===''?'':(isNaN(+body[k])?body[k]:+body[k])); }
+      const r=await fetch('/api/config/prefs',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(r.ok){
+        // 个人偏好即时生效；工作区与网络卡（data-restart）按 _RESTART_KEYS
+        // 语义提示需重启（prefs PUT 响应无 restart 字段，卡片徽标即语义）
+        const restart=form.dataset.restart==='1';
+        showToast(restart?'已保存，重启服务后生效':'偏好已保存（即时生效）');
+        showCfgResult(form.dataset.result,
+          [restart?'<div class="r-restart">🔄 已保存。该设置需重启服务后生效。</div>'
+                  :'<div class="r-ok">⚡ 已保存，全部偏好即时生效。</div>']);
+      }
+      else showToast('偏好保存失败：HTTP '+r.status, 'error');
+      return;
+    }
+    const r=await fetch('/api/config/system',{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({updates:collectFormUpdates(form)})});
+    if(!r.ok){ showToast('保存失败：HTTP '+r.status, 'error'); return; }
+    const j=await r.json();
+    showCfgResult(kind+'-result', systemResultLines(j));
+    const applied=j.applied_immediately||[], restart=j.restart_required_keys||[];
+    showToast(applied.length?'已保存，已即时下发到所有会话'
+      :restart.length?('以下设置需重启生效：'+restart.map(escapeHtml).join('、')):'未变更任何键');
+    loadSystemConfig();  // 回读真相：新写入的 api_key 立即以掩码回显
+  }catch(err){ showToast('保存失败：网络异常', 'error'); }
+});
+// 布尔开关改动警示（shell_enabled 等）：任一方向的改动都需重启，放开还有安全含义
+document.addEventListener('change',(e)=>{
+  const t=e.target.closest('[data-cfg-warn]');
+  if(!t) return;
+  const w=document.getElementById(t.dataset.cfgWarn);
+  if(w) w.hidden=false;
+});
+loadPrefs(); loadSystemConfig();
+
+// ---- 健康自检 ----
+async function checkHealth(){ const r=await fetch('/api/health'); const j=await r.json();
+  document.getElementById('health-out').textContent=JSON.stringify(j,null,2); }
+
+// ---- 📊 运行统计（GET /api/stats，只读）----
+// 渲染纪律：全部走 createElement + textContent（数字与动态字符串都不进
+// innerHTML 拼接，免转义面），与 escapeHtml 纪律等效且更严格。
+async function loadStats(){
+  const box=document.getElementById('stats-list');
+  let j;
+  try{ const r=await fetch('/api/stats'); j=await r.json(); }
+  catch(err){ box.textContent='统计加载失败：网络异常'; return; }
+  const w=j.wakers||{};
+  const statusDist=Object.entries(w.status||{}).map(([k,v])=>`${k}: ${v}`).join('，')||'—';
+  const rows=[
+    ['会话总数', j.sessions?j.sessions.total:0],
+    ['活跃会话（24h）', j.sessions?j.sessions.active_24h:0],
+    ['LLM 错误（累计）', j.llm_errors?j.llm_errors.total:0],
+    ['LLM 错误（24h）', j.llm_errors?j.llm_errors.last_24h:0],
+    ['events 行数', j.storage?j.storage.events_rows:0],
+    ['memories 行数', j.storage?j.storage.memories_rows:0],
+    ['数字员工（启用 / 总数）', `${w.enabled||0} / ${w.total||0}`],
+    ['数字员工状态分布', statusDist],
+  ];
+  const tbl=document.createElement('table');
+  for(const [k,v] of rows){
+    const tr=document.createElement('tr');
+    const td1=document.createElement('td'); td1.textContent=k;
+    const td2=document.createElement('td'); td2.textContent=String(v);
+    tr.appendChild(td1); tr.appendChild(td2); tbl.appendChild(tr);
+  }
+  box.replaceChildren(tbl);
+}
+document.getElementById('stats-refresh').addEventListener('click',loadStats);
+
+// ---- MCP 管理 ----
+async function loadMcp(){ const r=await fetch('/api/mcp/servers'); const j=await r.json();
+  const div=document.getElementById('mcp-list'); div.innerHTML='';
+  const servers=j.servers||[];
+  if(!servers.length){ div.innerHTML='<p class="hint">暂无 MCP 服务</p>'; return; }
+  for(const s of servers){
+    // 四态映射（与后端 worker_process._op_mcp_list 对齐）：连接中 ≠ 失败，
+    // 首次 npx 拉包/慢启动不该被标红吓到用户
+    const status=s.connected?'<span class="badge badge-green">已连接</span>'
+      :!s.enabled?'<span class="badge">已禁用</span>'
+      :s.status==='connecting'?'<span class="badge badge-orange">连接中…</span>'
+      :'<span class="badge badge-orange">连接失败</span>';
+    const toggle=s.enabled?'禁用':'启用';
+    const err=(!s.connected && s.enabled && s.error)
+      ? `<div class="hint" title="${escapeHtml(s.error)}">${escapeHtml(String(s.error).slice(0,280))}</div>`
+      : '';
+    div.innerHTML+=`<div class="mcp-item">
+      <div><strong>${escapeHtml(s.name)}</strong> ${status} <span class="hint">${escapeHtml(s.transport)} · ${escapeHtml(s.tool_count)}工具</span>${err}</div>
+      <div class="mcp-actions">
+        <button data-mcp-toggle="${escapeHtml(s.name)}" data-mcp-enabled="${s.enabled?'0':'1'}" class="btn-small">${toggle}</button>
+        <button data-mcp-del="${escapeHtml(s.name)}" class="btn-small danger">删除</button>
+      </div></div>`;
+  }
+}
+// MCP 行内按钮（事件委托，一次性注册；#mcp-list 在静态 DOM）。
+// P2-24：原 onclick="toggleMcp('${s.name}',...)" 把服务名当 JS 源码编译
+//（实体解码后字符串即可闭合），名来自用户粘贴的 MCP JSON，落盘后每次进
+// 设置页即注入。改 data-* 后名字只作纯数据经 dataset 传递。
+document.getElementById('mcp-list').addEventListener('click',async(e)=>{
+  const t=e.target.closest('button[data-mcp-toggle]');
+  if(t){ toggleMcp(t.dataset.mcpToggle, t.dataset.mcpEnabled==='1'); return; }
+  const d=e.target.closest('button[data-mcp-del]');
+  if(d){ delMcp(d.dataset.mcpDel); }
+});
+document.getElementById('mcp-form').addEventListener('submit',async(e)=>{e.preventDefault();
+  const raw=document.getElementById('mcp-json-input').value.trim();
+  if(!raw){showToast('请粘贴 JSON');return;}
+  let parsed;
+  try{parsed=JSON.parse(raw);}catch(err){showToast('JSON 格式错误: '+err.message, 'error');return;}
+  // 剥掉 mcpServers 外层(网上常见的 Claude Desktop 格式)
+  if(parsed.mcpServers){parsed=parsed.mcpServers;}
+  // 格式:{"<服务名>": {type,url,headers,...}} 或 {name,type,...}
+  let name,cfg;
+  const keys=Object.keys(parsed);
+  if(keys.length===1&&typeof parsed[keys[0]]==='object'&&!Array.isArray(parsed[keys[0]])){
+    name=keys[0]; cfg=parsed[name];
+  }else if(parsed.name){
+    name=parsed.name; cfg=parsed;
+  }else{showToast('JSON 格式:需要 {"mcpServers":{"服务名":{...}}} 或 {"服务名":{...}}');return;}
+  cfg.name=name; cfg.enabled=cfg.enabled!==false;
+  // type → transport 兼容
+  if(cfg.type&&!cfg.transport){cfg.transport=cfg.type==='http'?'streamable_http':cfg.type;}
+  const r=await fetch('/api/mcp/servers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+  const j=await r.json(); showToast(j.ok?`已添加 ${name}`:(j.message||'添加失败'));
+  if(j.ok){loadMcp();document.getElementById('mcp-json-input').value='';}
+});
+async function toggleMcp(name,enabled){
+  // 服务名来自用户粘贴的 MCP JSON 键（无字符集校验）：含 / ? # % 等字符时
+  // 不编码会改变 URL 路径语义（换路径段/注入 query/截断），波及无辜服务
+  await fetch(`/api/mcp/servers/${encodeURIComponent(name)}/enabled`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+  loadMcp();
+}
+async function delMcp(name){
+  const ok = await uiConfirm({title:'删除 MCP 服务', body:'确定删除「'+name+'」？', danger:true, okText:'删除'});
+  if(!ok) return;
+  await fetch(`/api/mcp/servers/${encodeURIComponent(name)}`,{method:'DELETE'}); loadMcp();
+}
+async function reloadMcp(){
+  const r=await fetch('/api/mcp/reload',{method:'POST'}); const j=await r.json();
+  showToast(j.ok?'已重新加载':'加载失败'); loadMcp();
+}
+loadMcp(); loadStats();
+</script>
+{% endblock %}

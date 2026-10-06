@@ -1,0 +1,26 @@
+name: remember
+description: >
+  把一条值得长期记住的事实写入用户记忆。
+  何时调用：用户透露身份信息（姓名、职业、所在地）、明确表达偏好或厌恶、
+  出现重要决策/目标/计划、用户纠正了之前的错误信息。
+  不要调用：闲聊寒暄、一次性任务执行过程、你自己（助手）的回复内容。
+
+parameters:
+  type: object
+  properties:
+    content:
+      type: string
+      description: 一条原子事实，用陈述句表达（如"用户主要用 Python 做数据分析"）。不要塞多条事实，分开多次调用。
+  required: [content]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.remember
+  function: _execute_remember
+
+side_effects:
+  destructive: false          # 写 profile.md（agent 记忆），不是改用户的内容文件
+  writes_state: true          # 改记忆 state
+  network_access: false
+  spawns_process: false

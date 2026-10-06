@@ -1,0 +1,32 @@
+name: create_wakerflow
+description: >
+  保存一个 wakerflow 流程定义（多步骤编排：串行/并行多个数字员工协作）。
+  接收完整的 flow YAML 文本，保存前会做全量 DSL 校验（校验失败会返回
+  具体错误，修正后重试即可）。步骤引用的 waker 必须已存在（或先用
+  create_waker 补齐）。DSL 语法与完整示例见 create-waker 技能的
+  resources/flow-dsl.md。同名流程默认拒绝覆盖，用户确认后传 overwrite=true。
+
+parameters:
+  type: object
+  properties:
+    yaml_text:
+      type: string
+      description: 完整的 flow YAML 文本（顶层 name/description/steps，可选 inputs/returns/调度段）。
+    overwrite:
+      type: boolean
+      description: 同名流程已存在且用户确认覆盖时传 true。默认 false。
+  required: [yaml_text]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.manage_waker
+  function: _execute_create_wakerflow
+
+side_effects:
+  destructive: true
+  writes_state: true
+  network_access: false
+  spawns_process: false
+
+blocked_in: [employee, subagent]

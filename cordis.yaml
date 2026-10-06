@@ -1,0 +1,14 @@
+# T4 组合根 profile：核心服务插件清单（loader.boot_file 消费）
+# inject 声明依赖，loader 按其拓扑排序（storage 先于 sessions/memory）。
+plugins:
+  - {id: config,   plugin: "src.plugins.config_plugin:apply"}
+  - {id: storage,  plugin: "src.plugins.storage_plugin:apply"}
+  - {id: workspace, plugin: "src.plugins.workspace_plugin:apply", inject: [storage]}
+  - {id: sessions, plugin: "src.plugins.sessions_plugin:apply", inject: [storage]}
+  - {id: memory,   plugin: "src.plugins.memory_plugin:apply",   inject: [storage]}
+  - {id: llm,      plugin: "src.plugins.llm_plugin:apply",      inject: [config]}
+  - {id: tools,    plugin: "src.plugins.tools_plugin:apply",    inject: [config]}
+  - {id: skills,   plugin: "src.plugins.skills_plugin:apply",   inject: [config]}
+  - {id: mcp,      plugin: "src.plugins.mcp_plugin:apply"}
+  # T8a 统一调度服务：waker/flow/memory 三个调度器共用（键 "schedule"）
+  - {id: schedule, plugin: "src.plugins.scheduler_plugin:apply", inject: [config]}

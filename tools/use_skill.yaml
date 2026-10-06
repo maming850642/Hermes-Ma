@@ -1,0 +1,27 @@
+name: use_skill
+description: >
+  加载并应用某个技能的详细操作指令。
+  当你判断当前任务需要专业技能时，先调用此工具获取完整指令，
+  然后严格按照指令执行任务。可用技能见系统提示的「技能目录」。
+  如果该技能附带附属资源（脚本、模板、参考文档等），返回值末尾会列出
+  资源清单及读取路径，你可以用 bash 的 cat 按需读取它们。
+
+parameters:
+  type: object
+  properties:
+    skill_name:
+      type: string
+      description: 技能名称（必须与技能目录中的名称完全一致）。
+  required: [skill_name]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.use_skill
+  function: _execute_use_skill
+
+side_effects:
+  destructive: false
+  writes_state: false
+  network_access: false
+  spawns_process: false

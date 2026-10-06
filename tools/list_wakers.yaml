@@ -1,0 +1,20 @@
+name: list_wakers
+description: >
+  列出当前所有数字员工（waker）与流程（wakerflow），含启用状态、调度配置与描述。
+  创建前先用它查重名；编排 flow 前用它确认可引用的 waker 名。
+
+parameters:
+  type: object
+  properties: {}
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.manage_waker
+  function: _execute_list_wakers
+
+side_effects:
+  destructive: false
+  writes_state: false
+  network_access: false
+  spawns_process: false

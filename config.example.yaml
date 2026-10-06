@@ -1,0 +1,140 @@
+# ============================================
+# Hermes 全局配置模板（唯一真相源）
+# ============================================
+# 复制本文件为 config.yaml 并填入真实值：
+#     cp config.example.yaml config.yaml
+# 修改后重启生效。环境变量（大写下划线）可覆盖同名键。
+# --------------------------------------------
+
+# ---- LLM 配置 ----
+# 支持任何兼容 OpenAI API 的服务（OpenAI / DeepSeek / Ollama / one-api 等）
+openai_api_key: "sk-your-api-key-here"
+openai_base_url: "http://localhost:8000/v1"
+llm_model_name: "qwen2.5:32b"
+llm_timeout: 120                # LLM 单次请求/流式超时秒数（防自托管端点挂死；0=不限）
+model_context_window: 0         # 模型最大上下文 token 数。0=自动探测（best-effort，读 /models 的
+                                # max_model_len 字段）；填具体值（如 131072）则以此为准（推荐）。
+                                # 改模型时一起改这里，确保按 token 压缩阈值算准。
+
+# ---- Web 服务（web_fastapi）----
+# python -m web_fastapi.main 启动时读取。
+web_host: "127.0.0.1"           # 监听地址：默认 127.0.0.1=仅本机。应用为免认证形态：没有任何
+                                # 访问控制，绑局域网地址意味着任何能访问端口的设备都能
+                                # 以本地用户身份使用完整 Agent 能力（文件/Shell/工具）。
+                                # 局域网使用：改为 "0.0.0.0"（启动时打印警告），请自行
+                                # 通过反向代理鉴权等方式保护端口，且只暴露给可信网络。
+                                # （环境变量 WEB_HOST 可覆盖）
+web_port: 8000                  # 监听端口（环境变量 WEB_PORT 可覆盖；前端用相对路径，改端口无需同步改前端）
+
+# ---- 项目空间（ADR-0005 产品面限流，全部可选；缺省用代码内默认值） ----
+web_tree_max_entries: 500        # 文件树单层最多返回条目（防 node_modules 级目录打爆前端）
+web_tree_preview_max_bytes: 524288   # 只读预览最大字节数（超出截断，512KB）
+git_clone_timeout_seconds: 600   # Git 克隆任务硬截止（秒）；超时 kill 并标记 failed
+web_max_parallel_sessions: 3    # 并行生成的会话数上限（多标签页各自对话的执行实例上限）
+# web_chat_queue_wait_seconds: 120  # chat 排队等待上限（见 ADR-0001，M4 启用）
+
+# ---- Agent 参数 ----
+max_short_term_messages: 20     # 短期记忆保留的对话轮数（1轮 = 1次用户+1次助手）
+max_memory_results: 5           # 检索长期记忆时返回的最大条数（top-k）
+max_agent_iterations: 50        # agent_llm 节点最大执行次数（防死循环）
+max_tokens: 8000                # LLM 单次回复最大 token 数（传透到 OpenAI API）
+tool_loop_threshold: 5          # 重复工具调用检测阈值（最近 N 次完全相同的工具调用判定为死循环并终止）
+                                # 0 = 关闭检测；值越大越宽松（3 = 3次相同调用即终止，防止浪费 LLM 轮次）
+waker_node_timeout: 600         # waker/wakerflow 子进程单次运行总超时（秒）。重任务（逐篇抓取+解读）建议 1800
+
+# ---- 上下文压缩 ----
+compact_keep_recent: 10         # 压缩时保留最近几条消息
+compact_min_messages: 20        # 触发压缩的最小消息数（旧的消息数阈值，保留作兜底）
+compact_summary_max_tokens: 5000
+compact_threshold_pct: 80       # 按 token 自动压缩：上下文 token 占用达到「模型窗口 × 此百分比」
+                                # 时自动压缩（0–100，每轮在 LLM 调用前检查）。0=关闭 token 压缩，
+                                # 回退到旧的消息数阈值逻辑。Web 用户可在设置页即时调节（热更新）。
+
+# ---- 人工审批 ----
+# 2026-06-19: 修复 Bug 3 —— 移除 interrupt_tools 死配置。
+# 人工审批统一由 LLM 主动调用 request_human_approval 工具触发，
+# 该工具会在执行前 interrupt() 暂停图，等待 CLI/Web 弹窗确认。
+# 原先配置的 interrupt_tools 字段从未被任何代码读取，形成"承诺但不生效"的不一致。
+
+# ---- 会话配置 ----
+session_persist: true           # 是否将对话历史持久化到本地 JSON
+
+# ---- 子智能体 ----
+sub_agent_max_depth: 2          # 子智能体最大嵌套深度
+sub_agent_default_timeout: 500  # 子智能体默认超时（秒）
+sub_agent_default_max_tokens: 20000
+
+# ---- 文件系统 ----
+# Agent 可访问的文件系统根目录（空=回退 agent home；非空=真实路径）。
+# 文件工具已退役，bash 是唯一文件通道（见 shell_enabled）。
+workspace_root: ""
+fs_max_file_size: 1048576       # 历史键（文件工具退役后无读取方，保留以免旧配置报未知键）
+
+# 仅对话（未挂载工作区 / 收件箱）可见的工具白名单，逗号分隔。
+# 缺省（或配空）回落代码内 DEFAULT_CHAT_ONLY_TOOLS：待办/压缩 + waker 管理面
+# + MCP 管理面 + web_fetch/web_search + 前缀通配 mcp__*（已连接 MCP 工具可见，
+# trust=approval 下调用仍弹审批）。精确名或 `mcp__*` 这类前缀。
+# workspace_chat_only_tools: "write_todos,compact_conversation,task,list_wakers,create_waker,set_waker_enabled,create_wakerflow,list_mcps,create_mcp,remove_mcp,web_fetch,web_search,use_skill,mcp__*"
+
+# ---- Shell 执行器（默认关闭，opt-in）----
+# 在 workspace_root 内执行 shell 命令。安全模型：白名单自动放行 + 其余 HITL 人工审批。
+# 注意：这是纵深防御而非完备沙箱；shell=True 带注入风险，真正隔离应靠容器/VM。
+shell_enabled: true             # 总开关（文件工具已退役，bash 是唯一文件通道，默认开启）
+# 白名单命令（逗号分隔）：只读/查询类命令自动放行。默认不含解释器(python/node)以防绕过。
+# 形态受限：git 仅放行只读子命令（log/show/diff/status/branch/remote…；reset/clean/apply/
+# rebase/checkout 等写形态、`-c` 注入与 `--output=`/`-o` 写形态一律转审批）；
+# env/printenv 仅放行无参数 / -0 / -u NAME（`env <程序>` = 借道执行任意程序，转审批）。
+shell_allowed_commands: "ls,ll,dir,cat,head,tail,less,more,echo,printf,grep,egrep,fgrep,rg,find,pwd,whoami,hostname,date,cal,wc,sort,uniq,cut,tr,awk,sed,diff,comm,cmp,git,tree,env,printenv,stat,file,du,df,cd"
+# 危险模式黑名单（用 `;;` 分隔，因为某些模式含逗号）：即使主程序在白名单也拦截并转人工审批。
+# 注意：本表与内置默认黑名单（src/tools/shell_safety.py 的 DEFAULT_BLOCKED_PATTERNS：
+# fork 炸弹、rm -rf /、find -exec、awk system、Windows 目录重定向、管道执行远程脚本等）
+# 是"追加"关系，默认表始终叠加生效，此处只需写项目自定义条目。
+# 管道执行脚本的写法必须带词边界——裸写 "curl|sh" 是个正则，等价于"命令含子串 sh
+# 即拦"，会误杀 git show / du -sh 等只读命令。
+shell_blocked_patterns: "curl\\b[^\\n|]*\\|\\s*(ba|z)?sh\\b;;wget\\b[^\\n|]*\\|\\s*(ba|z)?sh\\b"
+shell_timeout: 30               # 单次执行硬超时秒数（0=不限）
+shell_max_output_chars: 8000    # stdout/stderr 各自截断字符数
+
+# ---- 自进化工具面（默认关闭，opt-in）----
+# self_backup / verify_self / respawn_self 三件工具的总开关：开启后工具才
+# 注入 agent 工具面（CLI 与 Web 均生效；Web 设置页可开，下一轮对话生效）。
+# 注意：force_approval 审批护栏（写仓库路径的 bash 命令一律人工审批，
+# 见 src/tools/shell_safety.py）不随本开关变化——开关只控工具注入。
+self_evolve_enabled: false      # 出厂默认关闭；Web 设置页「子代理与工具」可开
+
+# ---- 网络工具 ----
+web_proxy: ""                   # 代理 URL（如 http://127.0.0.1:7890）。为空=直连（国内默认）；
+                                # 非空则 web_search / web_fetch 走代理（适合境外站点）。
+                                # 2026-09-09: 该值同时作为 MCP 子进程的 HTTP_PROXY/HTTPS_PROXY
+                                # 注入——ddg-search 等 MCP 搜索工具靠它访问境外（setup.sh 交互配置）。
+web_search_timeout: 15          # web_search 请求超时秒数（2026-06-19 新增，修复 Bug 9）
+web_fetch_timeout: 10
+web_fetch_max_chars: 8000
+
+# ---- 技能（Skills）----
+# 外部技能目录（分号分隔），复用已有的 Cline Rules / Cursor Rules 等
+extra_skills_dirs: ""
+
+# ---- MCP（Model Context Protocol）----
+# MCP 服务器配置文件路径。相对路径=项目根下，也可填绝对路径。
+# Agent 会知道此路径，可自主用文件工具编辑来增删 MCP server。
+mcp_servers_file: "mcp_servers"     # MCP 配置目录（每服务一个 mcp_<name>.json；旧单文件 yaml 已废弃）
+# 可选：注入所有 MCP 子进程的环境变量（优先级高于 web_proxy，低于各 mcp_*.json 的 env）。
+# 例：ddg-search 不走代理 → { HTTP_PROXY: "", HTTPS_PROXY: "" }
+# mcp_env: {}
+
+
+# ---- 日志 ----
+# 分层日志：logs/info.log（INFO+，仅 hermes.*）+ logs/error.log（ERROR+，全部 logger）
+# 按天滚动保留 7 天。控制台保持 WARNING（--debug 时 DEBUG）。
+log_dir: "logs"        # 日志目录（相对项目根，绝对路径亦可）
+log_to_file: true      # 是否写文件（false 则只控制台）
+
+# ---- Waker（数字员工）----
+# 数字员工后台调度器：FastAPI 主进程内的 daemon 线程，周期扫描全用户的
+# waker 配置，到期则通过 worker 子进程跑一轮 waker_run。
+# 关闭后 waker 不再自动触发，仍可通过 API 手动触发（api_enabled 的 waker）。
+waker:
+  enabled: true              # 总开关：false 时不启动调度线程
+  tick_seconds: 30           # 调度扫描间隔（秒）。过短增加 CPU/IO 开销，过长错过精确触发时刻
+  max_concurrent: 2          # 同时运行的 waker 任务上限（线程池容量）。LLM 调用偏重，建议 1-3

@@ -1,0 +1,16 @@
+{
+  "name": "ddg-search",
+  "enabled": true,
+  "transport": "stdio",
+  "command": "{PYTHON}",
+  "args": [
+    "-m",
+    "duckduckgo_mcp_server.server",
+    "--search-backend",
+    "auto"
+  ],
+  "env": {},
+  "url": "",
+  "headers": {},
+  "trust": "approval"
+}

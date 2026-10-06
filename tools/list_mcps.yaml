@@ -1,0 +1,20 @@
+name: list_mcps
+description: >
+  列出当前所有 MCP server：启用状态、传输类型、trust、连接状态、工具全名清单。
+  创建前先用它查重名；连接失败时看这里的错误/stderr。
+
+parameters:
+  type: object
+  properties: {}
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.manage_mcp
+  function: _execute_list_mcps
+
+side_effects:
+  destructive: false
+  writes_state: false
+  network_access: false
+  spawns_process: false

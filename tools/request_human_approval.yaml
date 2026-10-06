@@ -1,0 +1,39 @@
+name: request_human_approval
+description: >
+  请求人工审批一个操作。在执行高风险操作前调用此工具，
+  系统会暂停并等待用户确认。
+  工作流程：调用此工具 → 系统暂停弹出审批面板 → 用户确认/拒绝 →
+  审批结果作为反馈返回，你据此决定后续操作。
+  约定：用户输入 "approve" 视为通过，其他内容作为反馈传递给你继续处理。
+  权限模式语义：before_changes / plan 下暂停并弹窗等待确认；
+  full_access 下不弹窗、直接放行——回执会如实注明"未经任何人工确认"，
+  此时不要把该回执当作"已获人工批准"。
+
+parameters:
+  type: object
+  properties:
+    action:
+      type: string
+      description: 操作名称（如"发送邮件"、"删除文件"）。
+    details:
+      type: string
+      description: 操作详细描述（让用户能判断该不该批准）。
+  required: [action, details]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.human_approval
+  function: _execute_approval
+
+side_effects:
+  destructive: false          # 纯信号工具，不执行任何变更
+  writes_state: false
+  network_access: false
+  spawns_process: false
+
+# 审批触发由 _execute_approval（human_approval.py）实现：
+# - before_changes / plan：函数内部直接 raise InterruptSignal（暂停弹窗）；
+# - full_access：不弹窗直接放行，回执如实注明"未经任何人工确认"（P3-6）。
+# 若后续把 force_requireApproval 提升为 SideEffectsOverride 字段，
+# 可把该分支迁移到权限层；当前以函数内 raise 为准。

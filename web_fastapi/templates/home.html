@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}主页 · Hermes-Ma{% endblock %}
+
+{# 欢迎页（ADR-0005 草图1）：项目空间选择器。
+   卡片=最近项目；操作区=直接开聊 / 打开本地目录 / 克隆 Git / 新建空间。
+   托管(mounted)项目目录缺失时卡片标灰并提示重建路径。 #}
+{% block body %}
+<main class="main home-main">
+  <section class="welcome-hero">
+    <h1>Hermes·Ma</h1>
+    <p class="sub">选择一个项目空间继续工作，或随手开聊。</p>
+    <div class="hero-actions">
+      <button id="btn-direct-chat" class="btn-primary">💬 直接开聊</button>
+      <button id="btn-open-local" class="btn-ghost">📂 打开本地目录…</button>
+      <button id="btn-clone" class="btn-ghost">⬇ 克隆 Git 仓库…</button>
+      <button id="btn-new-space" class="btn-ghost">＋ 新建空间</button>
+    </div>
+  </section>
+
+  <section class="clone-status" id="clone-status"></section>
+
+  <section class="project-section">
+    <h2 class="section-title">最近打开</h2>
+    <div class="project-grid" id="project-grid">
+      <div class="grid-placeholder">加载中…</div>
+    </div>
+  </section>
+
+  <!-- 通用小表单弹窗：clone / new-space / open-local 三态复用 -->
+  <dialog id="dlg-form" class="dlg">
+    <form method="dialog" onsubmit="return false;">
+      <h3 id="dlg-title">标题</h3>
+      <label id="row-name">名称<input id="f-name" type="text" placeholder="可选，缺省自动取名"></label>
+      <label id="row-main">主输入<span style="display:flex;gap:0.4rem;"><input id="f-main" type="text" placeholder="" style="flex:1;"><button id="btn-browse" type="button" class="btn-small" style="display:none;">📂 浏览…</button></span></label>
+      <label id="row-slug">标识 slug<small>仅 a-z0-9._-</small><input id="f-slug" type="text" placeholder="留空自动生成"></label>
+      <p id="dlg-error" class="dlg-error"></p>
+      <div class="dlg-actions">
+        <button value="cancel" onclick="document.getElementById('dlg-form').close()">取消</button>
+        <button id="dlg-ok" class="btn-primary" value="ok">确定</button>
+      </div>
+    </form>
+  </dialog>
+</main>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/home.js?v=proj17"></script>
+{% endblock %}

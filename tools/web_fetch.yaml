@@ -1,0 +1,39 @@
+name: web_fetch
+description: >
+  抓取指定 URL 的网页内容，提取正文文本。国内直连，不使用代理。
+  适用于获取文章、文档、API 响应等网页内容。
+  自动提取正文，去除导航栏、广告等无关内容。
+  注意：能否抓取成功取决于目标站点本身是否国内可直连。
+
+parameters:
+  type: object
+  properties:
+    url:
+      type: string
+      description: 要抓取的网页 URL（必须包含 http:// 或 https://）。
+    max_chars:
+      type: integer
+      description: 返回内容的最大字符数，超出截断。
+      default: 8000
+      minimum: 100
+      maximum: 50000
+  required: [url]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.web_fetch
+  function: _execute_web_fetch
+
+side_effects:
+  destructive: false
+  writes_state: false
+  network_access: true
+  spawns_process: false
+
+# ── Layer 3：SSRF 防护（内网 IP force_deny，任何模式都拒绝）──
+# 用 se_evaluator（而非 se_overrides）——通用入口，支持任意 Python 判断逻辑。
+# check_ssrf 返回 SideEffectsOverride(force_deny=True) 当 URL 指向内网。
+side_effects_evaluator:
+  module: src.tools.web_fetch
+  function: check_ssrf

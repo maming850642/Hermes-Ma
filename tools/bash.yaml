@@ -1,0 +1,70 @@
+name: bash
+description: >
+  在工作区目录内执行 shell 命令并返回 stdout/stderr。
+  工作目录锚定在当前挂载的工作区（未挂载时为 agent 家目录），
+  初始 cwd 已是工作区根——无需 cd，直接用相对路径操作工作区内文件。
+  白名单命令（ls/cat/grep/git 等只读类）自动执行；
+  非白名单或危险命令会暂停等待人工审批。
+  含重定向（> / >>）或写文件形态（sed -i / sed w / sort -o / tee /
+  git config --global）的命令一律需要审批，即使程序在白名单内。
+  含命令替换 / 进程替换 / here-string（$( … )、反引号、<( … )、<<< ）
+  的命令一律需要审批——白名单程序配合替换体可执行任意命令。
+  sed 仅自动放行纯 s/// 替换（标志限 g/p/i/数字）；sed -i 原地改文件
+  走审批（改文件请用它，串联用 && 别用 ;）；其余脚本形态
+  （e/w/W/r/R 等命令、-f 脚本文件）一律需要审批，e 类执行形态被硬拒。
+  注意：无 OS 级沙箱——命令可用 cd 或绝对路径访问工作区之外的位置，
+  约束 = 命令分类 + 人工审批，而非文件系统隔离。
+  自进化护栏：命令文本里出现本仓库绝对路径（任一写法）且不是纯读形态
+  （重定向/sed -i/python -c 等）时，即使在 full_access 也强制弹审批
+  （force_approval）；写 .git/ 内部、写/删 .self-evolve/ 备份目录则任何
+  模式直接硬拒。改自己代码的标准流程见 self-evolve 技能（备份 → 修改 →
+  verify_self → respawn_self）。
+  有硬超时（默认 30s），超时即被终止：重试前先缩小查找范围，而不是加大 timeout；输出超长会被截断。
+  需在 config 中设置 shell_enabled: true 才启用。
+
+  ── 平台与环境（重要）──
+  宿主机是 Windows，shell 是 Git Bash（POSIX 语法）。
+  这里的 `/` 是 Git Bash 的 MSYS 虚拟根（指向 Git 安装目录），
+  不是文件系统根：`cd /`、`find /`、`ls /` 只会慢速扫描 Git 安装树，
+  既找不到用户文件也浪费超时。严禁从 `/` 或盘符根全盘扫描。
+  引用工作区外的 Windows 路径用盘符形式：`D:/some/dir` 或 `/d/some/dir`；
+  查找文件优先在工作区内（相对路径 `./dir`、`find ./dir`），
+  已知大致位置时直接给出具体路径再 find。
+
+parameters:
+  type: object
+  properties:
+    command:
+      type: string
+      description: 要执行的 shell 命令（支持管道、&&、;、|| 组合）。
+    timeout:
+      type: integer
+      description: 单次执行超时秒数（不传用 config 默认值 30，0 表示不限）。
+      minimum: 0
+      maximum: 600
+  required: [command]
+  additionalProperties: false
+
+runtime:
+  type: shell
+  commandField: command
+  timeoutField: timeout
+  cwd: workDir
+
+side_effects:
+  destructive: true          # 能力上限（能跑 rm）。Layer 3 会按实际命令修正
+  writes_state: false
+  network_access: false
+  spawns_process: true
+
+# ── Layer 3：按本次命令内容动态修正 destructive 标签 ──
+# classify() 在 src/tools/shell_safety.py 里，包装现有的 classify_command。
+# 白名单命令（ls/git/grep）→ destructive=False（降级，plan 放行）
+# 非白名单（rm/mkdir/pip）→ destructive=True（维持，before_changes 审批）
+# 黑名单（fork bomb 等）→ force_deny=True（硬底线，任何模式拒绝）
+side_effects_evaluator:
+  module: src.tools.shell_safety
+  function: classify
+
+# ── 配置门控：shell_enabled=False 时工具不进 bind_tools（LLM 看不到）──
+config_guard: shell_enabled

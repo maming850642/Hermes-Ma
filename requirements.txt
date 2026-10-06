@@ -1,0 +1,49 @@
+# ============================================
+# Hermes 项目依赖清单
+# 版本锁定，确保环境一致性
+# ============================================
+
+# ---- 核心框架 ----
+# 2026-08-15 T7: langgraph / langchain-openai / langchain-core 全量退役
+# （agent 循环为手写 ReAct，LLM 走 openai SDK 封装的 src/llm/client.py）
+openai>=1.40.0            # LLM API 客户端（LLMClient 底层）
+
+# ---- 记忆管理 ----
+# 2026-06-22: 从 Mem0 迁移至自研记忆模块（src/memory/），不再依赖 mem0ai
+# 2026-08: 后端定型为 SQLite + sqlite-vec + fastembed（见文末），无任何 Qdrant 依赖
+
+# ---- 配置管理 ----
+pydantic>=2.0.0,<3.0.0           # 数据校验
+pyyaml>=6.0,<7.0                 # YAML 配置解析（config.yaml、mcp_config.yaml）
+
+# ---- CLI 美化 ----
+rich>=13.0.0,<14.0.0             # 终端美化输出
+prompt_toolkit>=3.0.0,<4.0.0     # 高级命令行输入
+
+# ---- Web UI ----
+fastapi>=0.115.0,<1.0.0          # FastAPI Web 框架（2026-06-25 新增，替代 Streamlit）
+uvicorn[standard]>=0.30.0,<1.0.0 # ASGI 服务器
+jinja2>=3.1.0,<4.0.0             # 模板引擎
+python-multipart>=0.0.9          # 表单解析
+# 2026-09-10: itsdangerous 移除（ADR-0005 D5 认证撤除后全仓零引用）
+
+# ---- 工具 ----
+tiktoken>=0.7.0,<1.0.0           # Token 计数
+httpx>=0.27.0,<1.0.0             # HTTP 客户端（健康检查、嵌入模型检测）
+
+# ---- 网络工具 ----
+trafilatura>=1.6.0               # 网页正文提取（web_fetch / web_fetch_direct 工具）
+beautifulsoup4>=4.12.0           # HTML 解析（web_search_bing 解析必应结果，2026-06-18 新增）
+# 2026-06-16: web_search 改用 httpx 直连 DuckDuckGo HTML 接口，不再依赖 DDGS 库
+# 2026-06-18: web_search_bing 改用必应国内直连（cn.bing.com），无需代理
+
+# ---- MCP（Model Context Protocol 客户端） ----
+fastmcp>=3.0.0                   # MCP Client，连接外部 MCP Server 复用生态工具（2026-06-19 新增）
+# 2026-09-09: ddg-search MCP Server 内置为项目依赖（随项目环境安装），
+# mcp_servers/mcp_ddg-search.json 用 {PYTHON} 占位符以本解释器 -m 方式启动，
+# 不再依赖独立 conda 环境里的 exe 绝对路径（换设备 setup.sh 一次到位）
+duckduckgo-mcp-server==0.6.1     # DDG 搜索 MCP Server（search/fetch_content，走 web_proxy 代理）
+
+# 记忆语义检索（内置，用户无感）：向量引擎 + 本地 embedding 模型
+sqlite-vec>=0.1.6,<0.2
+fastembed>=0.7,<0.9

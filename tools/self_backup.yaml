@@ -1,0 +1,30 @@
+name: self_backup
+description: >
+  自进化第一步：修改本仓库任何文件之前，先把要改的文件快照到
+  .self-evolve/backups/<时间戳>/，失败时从这里 cp 回原路径回滚。
+  paths 传仓库相对路径（如 src/tools/shell_safety.py）或仓库内绝对路径。
+  .git/、data/、.self-evolve/ 本身不可备份。改动几个文件就列几个，
+  必须在动手改之前调用（改完再备份没有意义）。
+
+parameters:
+  type: object
+  properties:
+    paths:
+      type: array
+      items:
+        type: string
+      description: 要备份的文件清单（仓库相对路径）。
+  required: [paths]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.self_evolve
+  function: _execute_self_backup
+
+side_effects:
+  destructive: false          # 只写 .self-evolve/ 备份区，不碰仓库文件
+  writes_state: true
+
+config_guard: self_evolve_enabled   # 自进化工具面出厂默认关，设置页可开
+blocked_in: [employee, subagent]

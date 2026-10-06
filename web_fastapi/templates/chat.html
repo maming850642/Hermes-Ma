@@ -1,0 +1,147 @@
+﻿{% extends "base.html" %}
+{% block title %}对话 · Hermes-Ma{% endblock %}
+
+{# 2026-08-27: 导航统一回归顶栏（与其他页面一致），左侧边栏只保留会话管理。
+   body 输出 .app-shell（左会话边栏 + 主对话区），绕过默认 .main #}
+{% block body %}
+<div class="app-shell" id="app-shell">
+  <!-- 折叠态浮出的窄边栏：只放一个展开按钮 -->
+  <div class="sidebar-rail" id="sidebar-rail">
+    <button class="rail-btn" id="sidebar-expand" title="展开边栏">▤</button>
+  </div>
+  <!-- 左侧会话边栏 -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <span class="label">历史会话</span>
+      <span class="head-actions">
+        <button class="head-btn" id="new-session-btn" title="新建会话">＋</button>
+        <button class="head-btn" id="sidebar-collapse" title="收起边栏">◀</button>
+      </span>
+    </div>
+    <div class="session-list" id="session-list"></div>
+  </aside>
+
+  <!-- 主对话区 -->
+  <section class="chat-main">
+    <!-- 2026-07-03: Todo 常驻小窗——有 todo 时固定在对话区右上角，空则隐藏。
+         2026-09-05: 标题栏升级为拖拽把手（整面板移动，位置存 localStorage），
+         双击标题栏或 ⤾ 回默认位；⋮⋮ 列表项排序另属 Sortable，互不干扰 -->
+    <aside id="todo-panel" class="todo-panel" style="display:none;">
+      <div class="todo-header" title="拖动移动面板 · 双击回默认位置">
+        <span id="todo-header-text">📋 待办</span>
+        <span style="display:inline-flex;align-items:center;">
+          <button id="todo-reset-pos" class="todo-close" title="恢复默认位置">⤾</button>
+          <button id="todo-close" class="todo-close" title="收起">×</button>
+        </span>
+      </div>
+      <ul id="todo-list" class="todo-list"></ul>
+    </aside>
+    <div class="chat-wrap">
+      <!-- 后台生成提示条：切页期间会话仍在生成，回到本页时显示（chat.js 轮询） -->
+      <div id="bg-gen-banner" style="display:none;align-items:center;justify-content:space-between;gap:8px;padding:8px 14px;margin:8px 12px 0;border-radius:10px;background:rgba(255,180,0,.12);border:1px solid rgba(255,180,0,.4);font-size:13px;">
+        <span>⏳ 该会话正在后台生成中，完成后自动加载…</span>
+        <button id="bg-gen-stop" style="font-size:12px;padding:3px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);cursor:pointer;">■ 停止</button>
+      </div>
+      <div id="messages" class="messages"></div>
+      <div id="empty-state" class="empty-state">
+        <div class="empty-icon">💬</div>
+        <h2>开始对话</h2>
+        <p>问我任何问题，或试试：</p>
+        <div class="empty-suggestions">
+          <button class="suggestion-chip" data-q="帮我总结今天的新闻">📰 总结新闻</button>
+          <button class="suggestion-chip" data-q="用 Python 写一个快速排序">🐍 写代码</button>
+          <button class="suggestion-chip" data-q="搜索 LangGraph 最新文档">🔍 搜索文档</button>
+        </div>
+      </div>
+      <button id="scroll-bottom-btn" class="scroll-bottom-btn" title="回到底部">↓</button>
+      <div id="approval-area"></div>
+      <div class="input-area">
+        <div class="composer-inner">
+          <div class="input-shell" id="input-shell">
+            <!-- 顶部居中把手：向上拉 = 拉大输入框（54px ~ 60vh），双击复位 -->
+            <div id="pull-grip" class="pull-grip" title="向上拖拉大输入框 · 向下拉缩小 · 双击复位"><span></span></div>
+            <div id="image-preview" class="image-preview"></div>
+            <textarea id="msg-input" rows="2" title="Enter 发送 / Shift+Enter 换行 / 粘贴·拖拽图片 / 输入 /help 查看指令"
+              placeholder="输入消息… (Enter 发送 / Shift+Enter 换行)"></textarea>
+            <div class="tool-row">
+              <button id="attach-btn" class="attach-btn" title="添加图片">📎</button>
+              <button id="think-main-btn" class="tool-btn" title="本次发送是否开启主 Agent 推理">🧠 <span>思考</span></button>
+              <!-- W4/H4: 子智能体推理开关暂时隐藏（同旧版，chat.js 逻辑保留） -->
+              <button id="think-sub-btn" class="tool-btn" title="子智能体推理开关（暂未接线，隐藏中）" hidden></button>
+              <span class="pop-anchor">
+                <button id="perm-btn" class="tool-btn" title="权限模式"><span id="perm-ic">🔒</span> <span id="perm-label">审批</span></button>
+                <div class="popover" id="perm-pop">
+                  <div class="pop-item sel" data-v="before_changes" data-short="审批" data-ic="🔒"><span class="pi-ic">🔒</span><span class="pi-tx"><b>变更前审批</b><small>危险操作先征求同意</small></span><span class="pi-check">✓</span></div>
+                  <div class="pop-item" data-v="full_access" data-short="完全" data-ic="⚡"><span class="pi-ic">⚡</span><span class="pi-tx"><b>完全访问</b><small>全部工具直接执行</small></span><span class="pi-check">✓</span></div>
+                  <div class="pop-item" data-v="plan" data-short="计划" data-ic="📋"><span class="pi-ic">📋</span><span class="pi-tx"><b>计划模式</b><small>只读规划，不改系统</small></span><span class="pi-check">✓</span></div>
+                </div>
+              </span>
+              <span class="pop-anchor">
+                <button id="waker-btn" class="tool-btn" title="执行者（waker 人格，空=默认助手）"><span id="waker-ic">🤖</span> <span id="waker-label">默认助手</span></button>
+                <!-- 选项由 app.js loadWakerOptions 动态填充 -->
+                <div class="popover" id="waker-pop"></div>
+              </span>
+              <span class="pop-anchor">
+                <button id="model-btn" class="tool-btn" title="模型档案（默认=config.yaml）"><span id="model-ic">⚙️</span> <span id="model-label">默认</span></button>
+                <!-- 选项由 app.js loadModelOptions 动态填充 -->
+                <div class="popover" id="model-pop"></div>
+              </span>
+              <span class="tool-spacer"></span>
+              <button id="send-btn" class="send-btn btn-primary" title="发送">↑</button>
+              <input type="file" id="file-input" accept="image/*" multiple hidden>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 右侧只读文件树（ADR-0005 草图2）：无激活工作区根（收件箱/未配置）时
+       由 filetree.js 整列隐藏；只读浏览+预览，写操作仍走对话工具流与 HITL -->
+  <aside class="file-tree" id="file-tree-panel">
+    <div class="sidebar-head">
+      <span class="label">工作区文件</span>
+      <span class="head-actions">
+        <button class="head-btn" id="ftree-refresh" title="刷新">⟳</button>
+        <button class="head-btn" id="ftree-close" title="收起">▶</button>
+      </span>
+    </div>
+    <div id="ftree-crumb" class="ftree-crumb"></div>
+    <div class="ftree-body" id="ftree-body"></div>
+    <div id="ftree-empty" class="ftree-empty" hidden>当前项目没有文件树<br><small>（收件箱 / 未挂载工作区）</small></div>
+
+    <!-- Git 面板（下半区，可折叠）：提交树 + Pull/Push。数据由 gittree.js
+         经 /api/workspace/git/* 拉取；非 git 工作区显示占位；随本侧栏隐藏 -->
+    <div class="git-panel" id="git-panel" hidden>
+      <div class="sidebar-head git-head">
+        <span class="label">Git</span>
+        <span class="head-actions">
+          <button class="head-btn" id="git-fetch" title="fetch 远端（不合并）">⇣ᶠ</button>
+          <button class="head-btn" id="git-pull" title="拉取并快进合并（--ff-only）">⇣</button>
+          <button class="head-btn" id="git-push" title="推送当前分支">⇡</button>
+          <button class="head-btn" id="git-refresh" title="刷新">⟳</button>
+          <button class="head-btn" id="git-fold" title="折叠/展开">▾</button>
+        </span>
+      </div>
+      <div class="git-status" id="git-status"></div>
+      <div class="git-graph" id="git-graph"></div>
+    </div>
+  </aside>
+
+</div>
+{% endblock %}
+{% block scripts %}
+<!-- SortableJS（vendor 1.15.3，wakerflow 同源）：todo 面板拖拽排序，chat.js 依赖，须先于其加载 -->
+<script src="/static/vendor/Sortable.min.js"></script>
+<script src="/static/js/chat.js?v=proj29"></script>
+<script src="/static/js/filetree.js?v=proj16"></script>
+<script src="/static/js/gittree.js?v=git01"></script>
+<!-- P2-4 首批分块外置：自 chat.js 拆出，按原文件内出现顺序加载（均晚于 chat.js，运行期全局解析） -->
+<script src="/static/js/images.js?v=split01"></script>
+<script src="/static/js/markdown.js?v=split01"></script>
+<script src="/static/js/session_events.js?v=split02b"></script>
+<script src="/static/js/todo_panel.js?v=split01"></script>
+<!-- split02 顺延外置：会话恢复调度 + 会话侧栏（按原文件内出现顺序，均晚于 chat.js） -->
+<script src="/static/js/session_recovery.js?v=split02"></script>
+<script src="/static/js/sidebar.js?v=split02"></script>
+{% endblock %}

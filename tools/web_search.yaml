@@ -1,0 +1,31 @@
+name: web_search
+description: >
+  使用必应(Bing)搜索网络，国内直连、无需代理、无需 API Key。
+  适用于需要查找实时信息、新闻、技术文档等场景。
+  返回格式化的搜索结果列表，每条结果包含序号、标题、URL 和内容摘要。
+
+parameters:
+  type: object
+  properties:
+    query:
+      type: string
+      description: 搜索关键词。
+    max_results:
+      type: integer
+      description: 返回结果数量，默认 5 条，最多 10 条。
+      default: 5
+      minimum: 1
+      maximum: 10
+  required: [query]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.web_search
+  function: _execute_web_search
+
+side_effects:
+  destructive: false
+  writes_state: false
+  network_access: true
+  spawns_process: false

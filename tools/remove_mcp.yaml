@@ -1,0 +1,26 @@
+name: remove_mcp
+description: >
+  删除一个 MCP server：断开连接并删除 mcp_servers/mcp_<name>.json。
+  同名重建前必须先删。不可逆，会弹审批。
+
+parameters:
+  type: object
+  properties:
+    name:
+      type: string
+      description: 要删除的 server 名（与 create_mcp / list_mcps 中的 name 一致）。
+  required: [name]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.manage_mcp
+  function: _execute_remove_mcp
+
+side_effects:
+  destructive: true
+  writes_state: true
+  network_access: false
+  spawns_process: false
+
+blocked_in: [subagent]

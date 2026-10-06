@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-ma"
+dynamic = ["version"]
+description = "Hermes-Ma: single-user AI agent workbench (mount a folder or chat-only; CLI & Web UI over a plugin-based engine)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "openai>=1.40.0",
+    "pydantic>=2.0.0,<3.0.0",
+    "pyyaml>=6.0,<7.0",
+    "rich>=13.0.0,<14.0.0",
+    "prompt_toolkit>=3.0.0,<4.0.0",
+    "tiktoken>=0.7.0,<1.0.0",
+    "httpx>=0.27.0,<1.0.0",
+    "fastapi>=0.115.0,<1.0.0",
+    "uvicorn[standard]>=0.30.0,<1.0.0",
+    "jinja2>=3.1.0,<4.0.0",
+    "python-multipart>=0.0.9",
+    "trafilatura>=1.6.0",
+    "beautifulsoup4>=4.12.0",
+    "fastmcp>=3.0.0",
+    "duckduckgo-mcp-server==0.6.1",
+    "sqlite-vec>=0.1.6,<0.2",
+    "fastembed>=0.7,<0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "src.version.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+pythonpath = ["."]

@@ -1,0 +1,31 @@
+name: set_waker_enabled
+description: >
+  启用或禁用一个数字员工（waker）。启用后调度器开始按计划自动运行，
+  属于"放行自动劳动"的动作——只在用户明确同意后才启用
+  （如刚创建完的草稿，用户说"启用/可以/开吧"）。
+  用户说"停掉/先别跑了"时传 enabled=false。
+
+parameters:
+  type: object
+  properties:
+    name:
+      type: string
+      description: waker 名（先 list_wakers 可查现有名字）。
+    enabled:
+      type: boolean
+      description: true=启用调度；false=停用。
+  required: [name, enabled]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.manage_waker
+  function: _execute_set_waker_enabled
+
+side_effects:
+  destructive: true           # 启用=放行周期性自动运行，须过审批
+  writes_state: true
+  network_access: false
+  spawns_process: false
+
+blocked_in: [employee, subagent]

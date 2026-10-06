@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}用量 · Hermes-Ma{% endblock %}
+{% block content %}
+<style>
+  /* 仅 usage 页用到的少量补充样式（main.css 未覆盖，模式同 waker.html 页面级 style） */
+  .usage-head { display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 0.8rem; margin-bottom: 1.2rem; }
+  .usage-head h2 { font-weight: 600; letter-spacing: -0.02em; }
+  .usage-head-right { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  /* 模型筛选（2026-09-19）：全页生效 */
+  .model-filter {
+    font-size: 0.82rem; padding: 0.32rem 0.7rem; border-radius: 980px;
+    border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text);
+    max-width: 200px; }
+  /* 时间窗胶囊按钮组（stat-chip 同族：胶囊 + active 高亮） */
+  .usage-windows { display: flex; gap: 0.35rem; }
+  .usage-windows button {
+    font-size: 0.82rem; padding: 0.32rem 0.95rem; border-radius: 980px;
+    border: 1px solid var(--border); background: var(--bg-elevated);
+    color: var(--text-secondary); cursor: pointer; }
+  .usage-windows button:hover { color: var(--text); border-color: var(--text-tertiary); }
+  .usage-windows button.active { background: var(--accent-soft); color: var(--accent);
+    border-color: var(--accent); font-weight: 600; }
+  /* 四个数字汇总卡 */
+  .usage-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.9rem; }
+  .usage-stat { background: var(--bg-elevated); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 1rem 1.2rem; box-shadow: var(--shadow-sm); }
+  .usage-stat .k { font-size: 0.78rem; color: var(--text-tertiary); }
+  .usage-stat .v { font-size: 1.45rem; font-weight: 600; letter-spacing: -0.02em; margin-top: 0.2rem; }
+  .usage-stat .v.bad { color: var(--danger); }
+  /* 柱状图区 */
+  .usage-chart-wrap { overflow-x: auto; padding-bottom: 0.3rem; }
+  /* 模型配色（2026-09-19 堆叠图/图例共用；Apple 系统色，与主题一致） */
+  .usage-legend-models { --m1: var(--accent); --m2: #34c759; --m3: #af52de; --m4: #ff9500; }
+  .usage-legend { display: flex; gap: 1rem; font-size: 0.8rem; color: var(--text-secondary);
+    margin-bottom: 0.5rem; flex-wrap: wrap; align-items: center; }
+  .usage-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+    margin-right: 0.35rem; vertical-align: baseline; }
+  .usage-legend .lg-model { display: inline-flex; align-items: center; max-width: 240px; }
+  .usage-legend .lg-hint { color: var(--text-tertiary); font-size: 0.74rem; }
+  .usage-chart-empty { color: var(--text-tertiary); font-size: 0.88rem; padding: 2rem 0; text-align: center; }
+  /* 明细分页行 */
+  .usage-pager { display: flex; align-items: center; gap: 0.8rem; margin-top: 0.9rem; }
+  .usage-pager .pageinfo { font-size: 0.85rem; color: var(--text-secondary); }
+  /* 状态列：error 标红 */
+  .st-ok { color: #1a7a3a; }
+  .st-error { color: var(--danger); font-weight: 600; }
+  /* 空状态引导 */
+  .usage-empty { background: var(--surface); border: 1px dashed var(--border);
+    border-radius: var(--radius-lg); padding: 2.2rem 1.5rem; text-align: center;
+    color: var(--text-secondary); font-size: 0.92rem; }
+  .usage-empty .big { font-size: 1.6rem; display: block; margin-bottom: 0.5rem; }
+  @media (max-width: 720px) { .usage-stat-grid { grid-template-columns: 1fr 1fr; } }
+  /* 👀 调用详情弹窗（2026-09-19 重设计：dialog.dlg 基座 + 徽章/状态 pill/
+     指标 chips/分节卡片折叠，对齐 DeepSeek / OpenAI platform 的详情观感） */
+  .usage-detail-dlg { --m1: var(--accent); --m2: #34c759; --m3: #af52de; --m4: #ff9500;
+    width: min(780px, 94vw); padding: 0; }
+  .ud-head { padding: 1rem 1.3rem 0.85rem; border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+  .ud-head-line { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  .ud-badge { background: var(--accent-soft); color: var(--accent); font-weight: 600;
+    font-size: 0.85rem; padding: 0.18rem 0.7rem; border-radius: 980px; }
+  .ud-pill { font-size: 0.76rem; padding: 0.14rem 0.6rem; border-radius: 980px;
+    border: 1px solid transparent; font-weight: 600; }
+  .ud-pill:not(.ud-pill-bad) { background: rgba(52, 199, 89, 0.14); color: #1a7a3a; }
+  .ud-pill-bad { background: rgba(232, 72, 85, 0.12); color: var(--danger); }
+  .ud-id { font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 0.78rem; color: var(--text-tertiary); }
+  .ud-sub { font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.45rem; }
+  .ud-chips { display: flex; gap: 0.6rem; padding: 0.85rem 1.3rem 0; flex-wrap: wrap; }
+  .ud-chip { background: var(--bg-elevated); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 0.4rem 0.85rem;
+    display: flex; align-items: baseline; gap: 0.5rem; }
+  .ud-chip-k { font-size: 0.74rem; color: var(--text-tertiary); }
+  .ud-chip-v { font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 0.92rem; font-weight: 600; color: var(--text); }
+  .ud-list { max-height: 56vh; overflow-y: auto; display: flex; flex-direction: column;
+    gap: 0.65rem; padding: 0.9rem 1.3rem 1.1rem; }
+  .ud-sec { background: var(--bg-elevated); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+  .ud-sec summary { cursor: pointer; padding: 0.55rem 0.85rem; font-size: 0.8rem;
+    font-weight: 600; color: var(--text-secondary); list-style: none; user-select: none; }
+  .ud-sec summary::before { content: '▸'; display: inline-block; margin-right: 0.4rem;
+    color: var(--text-tertiary); transition: transform 0.15s; }
+  .ud-sec[open] summary::before { transform: rotate(90deg); }
+  .ud-sec[open] summary { border-bottom: 1px solid var(--border); }
+  .ud-sec-danger { border-color: var(--danger); }
+  .ud-sec-danger summary { color: var(--danger); }
+  .ud-sec-note[open] summary { border-bottom: none; }
+  .ud-note { padding: 0.65rem 0.9rem 0.75rem; font-size: 0.84rem; line-height: 1.55;
+    color: var(--text-secondary); }
+  .ud-v { margin: 0; padding: 0.7rem 0.85rem; white-space: pre-wrap; word-break: break-word;
+    font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-size: 0.78rem;
+    line-height: 1.55; color: var(--text); background: var(--bg);
+    border-radius: 0 0 var(--radius) var(--radius); }
+</style>
+
+<div class="page-wrap">
+  <div class="usage-head">
+    <h2>📊 Token 用量</h2>
+    <div class="usage-head-right">
+      <select id="model-filter" class="model-filter" title="按模型筛选（汇总/趋势/场景/明细全页生效）">
+        <option value="">全部模型</option>
+      </select>
+      <div class="usage-windows" id="usage-windows">
+        <button type="button" data-days="1" title="今天">今天</button>
+        <button type="button" data-days="7" class="active" title="近 7 天">7 天</button>
+        <button type="button" data-days="30" title="近 30 天">30 天</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 空状态：后端无任何用量数据时替代全部区块 -->
+  <div id="usage-empty" class="usage-empty" hidden>
+    <span class="big">📊</span>
+    用量记账自本版本部署起开始积累，发起新对话或运行 Waker 后再来查看
+  </div>
+
+  <div id="usage-body">
+    <!-- 汇总卡：窗口内合计 -->
+    <div class="usage-stat-grid">
+      <div class="usage-stat"><div class="k">输入 Tokens</div><div class="v" id="st-in">–</div></div>
+      <div class="usage-stat"><div class="k">输出 Tokens</div><div class="v" id="st-out">–</div></div>
+      <div class="usage-stat"><div class="k">调用次数</div><div class="v" id="st-calls">–</div></div>
+      <div class="usage-stat"><div class="k">错误次数</div><div class="v" id="st-errors">–</div></div>
+    </div>
+
+    <!-- 按日趋势：纯 SVG 堆叠柱状图（柱内按模型分段着色，实色=输入、浅色=输出） -->
+    <section class="card usage-legend-models" style="margin-top:1.2rem;">
+      <h3>按日趋势 <span class="hint" id="chart-sub" style="margin:0;"></span></h3>
+      <div class="usage-legend" id="usage-legend-models">
+        <span class="lg-model"><i></i>—</span>
+      </div>
+      <div class="usage-chart-wrap" id="usage-chart"></div>
+    </section>
+
+    <!-- 按 scope 分组合计 -->
+    <section class="card">
+      <h3>按场景合计</h3>
+      <div id="usage-scope"></div>
+    </section>
+
+    <!-- 明细（最近在前，分页） -->
+    <section class="card">
+      <h3>调用明细 <span id="rec-total-badge" class="badge"></span></h3>
+      <div id="usage-records"></div>
+      <div class="usage-pager">
+        <button type="button" id="rec-prev" class="btn-small">← 上一页</button>
+        <span class="pageinfo" id="rec-pageinfo"></span>
+        <button type="button" id="rec-next" class="btn-small">下一页 →</button>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/usage.js?v=d2v4"></script>
+{% endblock %}

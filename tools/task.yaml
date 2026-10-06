@@ -1,0 +1,52 @@
+name: task
+description: >
+  启动一个短期子智能体来处理独立的复杂任务。
+  子智能体是临时的，完成后返回一个结果。
+  默认继承当前会话可用工具（inherit_tools=true）；纯推理、不需要工具时
+  才显式传 inherit_tools=false。子智能体无审批通道：写/破坏性操作会被
+  拒绝并继续，只读工具（web_fetch/web_search/bash 只读）可正常执行。
+  适用于：任务复杂多步骤且可隔离执行、不依赖其他任务可并行、
+  需要大量 token 或专注推理、只关心最终结果不关心中间步骤。
+
+parameters:
+  type: object
+  properties:
+    instruction:
+      type: string
+      description: 详细的任务描述，包括期望的输出格式。
+    subagent_name:
+      type: string
+      description: 子智能体名称（可选，用于日志）。
+      default: sub_agent
+    timeout:
+      type: integer
+      description: 超时时间（秒），默认用配置值（60s），0 表示不限。
+      minimum: 0
+      default: 60
+    max_tokens:
+      type: integer
+      description: 最大输出 token 数，默认用配置值。
+      minimum: 100
+    inherit_tools:
+      type: boolean
+      description: >
+        是否继承当前会话可用工具。默认 true（省略即继承）。
+        子任务需要读文件/搜索/MCP 时保持 true；纯推理时显式传 false。
+      default: true
+  required: [instruction]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.sub_agent
+  function: _execute_task
+  # 关键：ctx.permission_mode 被传给 StreamingSubAgent → 子 agent 继承父会话 mode
+
+side_effects:
+  destructive: false          # task 本身不破坏，破坏的是子 agent 的工具调用
+  writes_state: false
+  network_access: false
+  spawns_process: true        # spawn 子 agent（plan 允许）
+
+# 没有 Layer 3 —— task 本身不按参数区分行为
+# 嵌套深度检查在 _execute_task 函数内部用 contextvar _current_depth 处理

@@ -1,0 +1,64 @@
+name: create_mcp
+description: >
+  接入一个 MCP server：校验配置、写入 mcp_servers/、立刻尝试连接。
+  用户丢来 GitHub 链接、npx 包名或远程 URL 时使用。首次接入前先加载
+  install-mcp 技能按其流程走（抓 README、识别 npx/{PYTHON}/URL 形态、
+  缺 API key 先问用户）。name 只能含字母/数字/下划线/短横线（1-64）。
+  transport=command 即 stdio（填 command + args）；sse / streamable_http
+  填 url（可选 headers）。trust 默认 approval（每次调用弹审批）；用户
+  明确信任才用 full。同名已存在会拒绝，需先 remove_mcp。连接约 45s 上限，
+  超时则已落盘、后台继续连，下一轮 list_mcps 确认。成功返回 mcp__<name>__<tool>
+  全名清单。
+
+parameters:
+  type: object
+  properties:
+    name:
+      type: string
+      description: 唯一标识（文件名 mcp_<name>.json）。^[a-zA-Z0-9_-]{1,64}$。
+    transport:
+      type: string
+      enum: [command, sse, streamable_http]
+      description: command=本地 stdio 进程；sse / streamable_http=远程 URL。
+    command:
+      type: string
+      description: stdio 可执行文件（如 npx、{PYTHON}）。command 型必填。
+    args:
+      type: array
+      items:
+        type: string
+      description: 命令行参数，如 ["-y","@org/server"] 或 ["-m","pkg"]。
+    env:
+      type: object
+      additionalProperties:
+        type: string
+      description: 传给子进程的环境变量（API key 等）。缺密钥先问用户，绝不瞎填。
+    url:
+      type: string
+      description: sse / streamable_http 的服务 URL。
+    headers:
+      type: object
+      additionalProperties:
+        type: string
+      description: 远程传输的 HTTP 头（如 Authorization）。
+    trust:
+      type: string
+      enum: [full, approval, deny]
+      description: >
+        信任级别。approval=每次 MCP 工具调用弹审批（默认，最安全）；
+        full=当普通网络工具；deny=不信任。不确定就 approval。
+  required: [name, transport]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.manage_mcp
+  function: _execute_create_mcp
+
+side_effects:
+  destructive: true           # before_changes 弹审批，展示完整配置（含 env）
+  writes_state: true
+  network_access: true
+  spawns_process: true        # stdio 会拉起子进程
+
+blocked_in: [subagent]        # task 子代理不能改 MCP；waker 允许（技能会警告无人值守）

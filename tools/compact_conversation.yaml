@@ -1,0 +1,24 @@
+name: compact_conversation
+description: >
+  压缩当前对话的早期部分。将早期对话历史压缩成一段摘要，
+  保留最近的关键消息，释放上下文窗口。
+  何时使用：仅在系统提示明确要求时，或完成一个主要阶段后。
+  注意：调用后压缩立即同步完成（早期对话已被替换为摘要），
+  请直接继续任务，不要再次调用本工具。
+
+parameters:
+  type: object
+  properties: {}
+  required: []
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.compact
+  function: _execute_compact
+
+side_effects:
+  destructive: false          # 压缩是 agent 内部认知活动，不是对用户世界的变更
+  writes_state: true          # 会改 messages state
+  network_access: false
+  spawns_process: false

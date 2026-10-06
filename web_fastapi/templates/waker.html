@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}Waker · Hermes-Ma{% endblock %}
+{% block content %}
+<style>
+  /* 仅 waker 页用到的少量补充样式（main.css 未覆盖） */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.2rem 1rem; }
+  .form-grid label { margin: 0.5rem 0; }
+  .form-grid .full { grid-column: 1 / -1; }
+  .form-grid textarea { width: 100%; }
+  .waker-meta { font-size: 0.82rem; color: var(--text-secondary); margin: 0.4rem 0;
+    display: flex; gap: 0.6rem 1.2rem; flex-wrap: wrap; }
+  .waker-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.9rem; }
+  /* 运行中进度行（与 flow-progress 一致） */
+  .waker-progress {
+    margin: 0.6rem 0; padding: 0.5rem 0.8rem; border-radius: 6px;
+    background: rgba(0,102,204,0.08); font-size: 0.85rem; font-weight: 500;
+    border-left: 3px solid var(--accent, #0066cc);
+  }
+  /* 工具白名单 checkbox 列表 */
+  .tools-checkbox-list { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 1rem; }
+  .tools-checkbox-list label { display: flex; align-items: center; gap: 0.4rem; margin: 0;
+    font-weight: 400; cursor: pointer; }
+  .tools-checkbox-list input[type="checkbox"] { width: auto; margin: 0; }
+  .tools-checkbox-list .tool-desc { font-size: 0.75rem; color: var(--text-secondary); }
+  /* 运行记录抽屉：上表下详情 */
+  .log-overlay, .token-modal {
+    position: fixed; inset: 0; z-index: 300;
+    background: rgba(0,0,0,0.45);
+    display: flex; align-items: center; justify-content: center; padding: 2rem;
+  }
+  .token-modal { z-index: 400; }
+  .log-box, .token-box {
+    background: var(--bg-elevated); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md); max-width: 100%;
+  }
+  .log-box { width: 960px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+  .log-header { display: flex; align-items: center; justify-content: space-between;
+    padding: 0.9rem 1.3rem; border-bottom: 1px solid var(--border); }
+  .log-body { padding: 0; overflow: hidden; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .run-table-wrap { flex: 0 0 auto; max-height: 36vh; overflow-y: auto; }
+  .run-table { margin: 0; box-shadow: none; border-radius: 0; }
+  .run-table th, .run-table td { padding: 0.55rem 0.9rem; font-size: 0.84rem; white-space: nowrap; }
+  .run-table tbody tr { cursor: pointer; }
+  .run-table tbody tr:hover { background: var(--surface); }
+  .run-table tbody tr.selected { background: var(--accent-soft); }
+  .run-table .rid { font-family: "SF Mono", Consolas, monospace; font-size: 0.76rem;
+    color: var(--text-secondary); }
+  .run-table td.hint { white-space: normal; cursor: default; }
+  .badge-blue { background: #d6e8fb; color: #0b5cad; }
+  .badge-red { background: #fde0e0; color: #b3282d; }
+  .run-detail { flex: 1 1 auto; min-height: 200px; overflow: hidden; display: flex; flex-direction: column;
+    border-top: 1px solid var(--border); }
+  .run-detail-head { display: flex; gap: 0.35rem; padding: 0.55rem 1.1rem 0.25rem; align-items: center; }
+  .run-tab { background: none; border: none; padding: 0.32rem 0.75rem; border-radius: 980px;
+    font-size: 0.82rem; color: var(--text-secondary); cursor: pointer; }
+  .run-tab:hover { background: var(--surface); color: var(--text); }
+  .run-tab.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .run-detail-body { flex: 1; overflow-y: auto; padding: 0.55rem 1.2rem 1.1rem; }
+  .run-detail-body .md-body { font-size: 0.88rem; line-height: 1.65; }
+  .run-detail-body .md-body h1, .run-detail-body .md-body h2, .run-detail-body .md-body h3 {
+    font-size: 1rem; margin: 0.8em 0 0.35em; }
+  .run-detail-body .md-body pre { white-space: pre-wrap; word-break: break-word; max-height: none; }
+  .run-event-line { font-family: "SF Mono", Consolas, monospace; font-size: 0.78rem;
+    padding: 0.28rem 0; border-bottom: 1px solid var(--border); color: var(--text); }
+  .run-event-line .ts { color: var(--text-secondary); margin-right: 0.6rem; }
+  .token-box { width: 560px; padding: 1.5rem; }
+  .token-box input { width: 100%; font-family: "SF Mono", Consolas, monospace; font-size: 0.85rem; }
+</style>
+
+<div class="page-wrap">
+  <h2>⏰ Waker <span class="hint" style="font-size:0.85rem;font-weight:400;">数字员工</span></h2>
+  <p class="hint">周期/定时执行的智能体任务：可挂工具、配人格、查日志、对外暴露 API 触发。</p>
+  <button onclick="openCreateForm()" class="btn-primary">＋ 新建 Waker</button>
+
+  <!-- 新建/编辑表单（默认隐藏，点新建/编辑才显示） -->
+  <div id="waker-form-details" class="card" style="margin-top:1.2rem;display:none;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;">
+      <strong id="form-summary-text">📝 Waker 表单</strong>
+    </div>
+    <form id="waker-form">
+      <input type="hidden" id="form-mode" value="create">
+      <div class="form-grid">
+        <label class="full">名称 <span class="hint" style="display:inline">（新建必填，编辑时只读）</span>
+          <input id="f-name" placeholder="如：每日新闻速递"></label>
+        <label class="full">描述 <input id="f-description" placeholder="一句话说明这个 Waker 做什么"></label>
+        <label class="full">IDENTITY（核心职责）
+          <textarea id="f-identity" rows="3" placeholder="你是一个……"></textarea></label>
+        <label class="full">PERSONA（工作风格）
+          <textarea id="f-persona" rows="3" placeholder="严谨、简洁、给出可执行结论……"></textarea></label>
+        <label class="full">BIBLE（工作准则）
+          <textarea id="f-bible" rows="3" placeholder="必须……；不要……"></textarea></label>
+        <label>工作目录 <input id="f-working_dir" placeholder="留空=默认"></label>
+        <label>权限模式
+          <select id="f-permission_mode" style="width:100%;">
+            <option value="before_changes">🔒 变更前审批</option>
+            <option value="full_access">⚡ 完全访问</option>
+            <option value="plan">📋 计划模式</option>
+          </select></label>
+        <label class="full">task_prompt（自动任务描述）
+          <textarea id="f-task_prompt" rows="3" placeholder="每天抓取 X 并汇总成 Y……"></textarea></label>
+        <label>调度类型
+          <select id="f-schedule_type" onchange="onScheduleChange()" style="width:100%;">
+            <option value="none">仅手动</option>
+            <option value="interval">间隔执行</option>
+            <option value="daily">每天定时</option>
+          </select></label>
+        <label id="f-interval-wrap" style="display:none">间隔分钟
+          <input id="f-interval_minutes" type="number" min="1" value="60"></label>
+        <label id="f-daily-wrap" style="display:none">每天
+          <input id="f-daily_at" type="time" value="09:00"></label>
+        <label class="full">工具白名单 <span class="hint" style="display:inline">（勾选允许的工具，全不勾=允许全部）</span>
+          <div id="f-tools-list" class="tools-checkbox-list" style="border:1px solid var(--border);border-radius:var(--radius);padding:0.6rem;max-height:180px;overflow-y:auto;background:var(--bg);">
+            <span class="hint">加载工具列表...</span>
+          </div>
+        </label>
+        <label>最大运行次数 <span class="hint" style="display:inline">（0=不限）</span>
+          <input id="f-max_runs" type="number" min="0" value="0"></label>
+        <label>过期时间 <input id="f-expire_at" type="datetime-local"></label>
+        <label class="full" style="display:flex;align-items:center;gap:0.5rem;">
+          <input id="f-api_enabled" type="checkbox" style="width:auto;">
+          <span>启用外部 API 触发 <span class="hint" style="display:inline">（创建后会生成 token）</span></span>
+        </label>
+      </div>
+      <div style="margin-top:1rem;display:flex;gap:0.5rem;">
+        <button type="submit" class="btn-primary">保存</button>
+        <button type="button" onclick="closeForm()">取消</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Waker 列表 -->
+  <div id="waker-list" style="margin-top:1.2rem;">
+    <p class="hint">加载中……</p>
+  </div>
+
+  <!-- 运行记录抽屉：上表下详情 -->
+  <div id="log-overlay" class="log-overlay" style="display:none;">
+    <div class="log-box">
+      <div class="log-header">
+        <span id="log-title" style="font-weight:600;">运行记录</span>
+        <button type="button" onclick="closeLogs()" class="btn-small">✕ 关闭</button>
+      </div>
+      <div class="log-body">
+        <div class="run-table-wrap">
+          <table class="run-table">
+            <thead>
+              <tr>
+                <th>状态</th>
+                <th>开始时间</th>
+                <th>结束时间</th>
+                <th>耗时</th>
+                <th>run_id</th>
+              </tr>
+            </thead>
+            <tbody id="run-table-body">
+              <tr><td colspan="5" class="hint">加载中……</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="run-detail" id="run-detail">
+          <div class="run-detail-head">
+            <button type="button" class="run-tab active" data-tab="result">结果</button>
+            <button type="button" class="run-tab" data-tab="events">事件流</button>
+            <span id="run-detail-meta" class="hint" style="margin:0 0 0 auto;"></span>
+          </div>
+          <div class="run-detail-body" id="run-detail-result"><p class="hint">点选上方一条记录查看详情</p></div>
+          <div class="run-detail-body" id="run-detail-events" style="display:none;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- API Token 展示（仅创建后弹一次） -->
+  <div id="token-overlay" class="token-modal" style="display:none;">
+    <div class="token-box">
+      <h3 style="margin-bottom:0.5rem;">🔑 Waker 创建成功</h3>
+      <p class="hint" style="margin-bottom:0.8rem;">这是该 Waker 的外部触发令牌（仅本次显示，请立即复制保存）：</p>
+      <input id="token-value" readonly>
+      <div style="margin-top:1rem;display:flex;gap:0.5rem;">
+        <button onclick="copyToken()" class="btn-primary">复制</button>
+        <button onclick="closeToken()">关闭</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/waker.js?v=wfext01"></script>
+{% endblock %}

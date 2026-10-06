@@ -1,0 +1,39 @@
+name: verify_self
+description: >
+  自进化验证门：对自己仓库的改动做四道检查——① 静态检查（py 编译 /
+  YAML 解析 / SKILL.md frontmatter）；② import 冒烟（子进程真实 import
+  被改模块 + 核心入口，抓编译期查不到的 import 失败）；③ pytest 基线
+  对比（首次跑会建立基线，之后只拦"新增失败"，既有红测试不算你头上）；
+  ④ 主进程导入面标注（被 web 主进程加载的模块 respawn 刷不到，会标注
+  "需手动重启服务"，必须如实转告用户）。paths 传本次改过的文件清单。
+  pytest_args 可圈子集（如 "tests/test_shell_gate.py -k deny"），改前改后
+  用同一 scope 才可比。通过后才能 respawn_self。
+
+parameters:
+  type: object
+  properties:
+    paths:
+      type: array
+      items:
+        type: string
+      description: 本次修改过的文件清单（仓库相对路径）。
+    pytest_args:
+      type: string
+      description: >
+        传给 pytest 的附加参数（空格分隔，路径用正斜杠）。默认全量跑，
+        耗时较长；改前建基线与改后验证要用同一 scope 才可比。
+  required: [paths]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.self_evolve
+  function: _execute_verify_self
+
+side_effects:
+  destructive: false
+  writes_state: true          # 基线与验证状态落 .self-evolve/
+  spawns_process: true        # import 冒烟 / pytest / git status 子进程
+
+config_guard: self_evolve_enabled   # 自进化工具面出厂默认关，设置页可开
+blocked_in: [employee, subagent]

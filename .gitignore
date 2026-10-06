@@ -1,0 +1,79 @@
+# 自进化备份/验证状态（self_backup 工具写入，不入库）
+.self-evolve/
+
+# 环境配置（包含 API Key，不提交）
+.env
+config.yaml
+
+# 数据目录（Qdrant 持久化、会话历史）。例外：waker 人格三件套入库
+# （BIBLE/IDENTITY/PERSONA）。waker.yaml 不入库：内嵌 api_token/凭据
+# 且 state 随每次运行变化；latest_result/weekly/runs 等运行产物同样排除
+data/*
+!data/home/
+data/home/*
+!data/home/wakers/
+data/home/wakers/*/*
+!data/home/wakers/*/BIBLE.md
+!data/home/wakers/*/IDENTITY.md
+!data/home/wakers/*/PERSONA.md
+
+# 本机专属 MCP 配置（含绝对路径，勿入库）
+mcp_servers/mcp_*-data.json
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# 本地环境文件的变体（.env 本身已在上方）
+.env.*
+
+# SQLite 运行时副产物（*.db 本体通配，防漏网）
+*.db
+*.db-wal
+*.db-shm
+
+# 日志文件
+logs/
+*.log
+
+# 虚拟环境
+.venv/
+venv/
+
+# 打包产物
+*.egg-info/
+dist/
+build/
+
+# IDE 配置
+.vscode/
+.idea/
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# pip 命令残留文件（如 =1.37.0）
+=*
+
+# Windows NUL 重定向残留
+nul
+
+# 测试临时文件
+test_*.txt
+
+# 根目录一次性测试脚本
+/test_fix.py
+/test_ollama.py
+/test_qdrant.py
+/test_tool_call.py
+/test_memory_integration.py
+mcp_servers.yaml
+
+# ZCode agent plans/sessions (local only)
+.zcode/
+
+# uv 锁定文件（依赖锁定仍以 pyproject.toml + requirements.txt 为准）
+uv.lock

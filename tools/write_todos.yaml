@@ -1,0 +1,42 @@
+name: write_todos
+description: >
+  创建或更新待办事项列表。传入完整的待办列表（全量替换，非增量）。
+  每个待办项含 id（唯一标识符）、content（任务内容）、status（任务状态）。
+  status 值域：pending（未开始）/ in_progress（进行中，同时只有一个）/ completed（已完成）/ cancelled（不再需要）。
+
+parameters:
+  type: object
+  properties:
+    todos:
+      type: array
+      description: 完整的待办事项列表（全量替换）。
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+            description: 唯一标识符。
+          content:
+            type: string
+            description: 任务内容描述。
+          status:
+            type: string
+            enum: [pending, in_progress, completed, cancelled]
+            description: 任务状态。
+        required: [id, content, status]
+  required: [todos]
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.write_todos
+  function: _execute_write_todos
+
+side_effects:
+  destructive: false          # 改 todos 是 agent 内部认知活动
+  writes_state: true          # 改 todos state
+  network_access: false
+  spawns_process: false
+
+# _execute_write_todos 直接返回 ToolResult（含 state_updates={"todos": [...]}）
+# 取代现有 ResultHandler 注册表的 _handle_write_todos

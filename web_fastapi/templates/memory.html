@@ -1,0 +1,418 @@
+{% extends "base.html" %}
+{% block title %}记忆 · Hermes-Ma{% endblock %}
+{% block content %}
+{# ══════════ 2026-09-06 分组卡片重设计 ══════════
+   对齐 config.html 的新设计语言：page-wrap + card 分组 + badge 徽标 +
+   btn-primary/btn-small/danger 按钮 + 原生 dialog.dlg 弹窗。
+   功能不变：搜索 / 来源筛选 / 排序 / 逐条编辑删除 / 聚合 / 聚合设置 /
+   恢复备份 / 危险操作区。样式全部移入 main.css（记忆页样式段），
+   本模板零内联 style。所有动态插值经 escapeHtml；按钮零 onclick——
+   一律 id/data-* + addEventListener 事件委托。 #}
+<div class="page-wrap">
+  <h2>🧠 长期记忆<span id="mem-count" class="count-badge"></span></h2>
+
+  <!-- 🔄 聚合与备份：主操作区 -->
+  <section class="card">
+    <h3>🔄 聚合与备份 <span class="badge badge-green">随时可跑</span></h3>
+    <p class="hint">聚合把碎片记忆整合为更少更密的条目（LLM 整合，约需 10-30 秒）；每次聚合前自动备份，误聚合可从备份恢复。</p>
+    <div class="cfg-card-actions">
+      <button type="button" id="btn-consolidate" class="btn-primary">🔄 聚合记忆</button>
+      <button type="button" id="btn-consolidate-cfg" class="btn-small">⚙️ 聚合设置</button>
+      <button type="button" id="btn-open-restore" class="btn-small">↩️ 恢复备份</button>
+    </div>
+    <div id="consolidate-status" class="mem-status" hidden></div>
+  </section>
+
+  <!-- 📚 记忆列表：搜索 / 筛选 / 排序 / 逐条管理 -->
+  <section class="card">
+    <h3>📚 记忆列表 <span id="mem-total-badge" class="badge">共 0 条</span></h3>
+    <p class="hint">跟顶栏项目空间走：只显示本项目 ∪ 全局记忆（与对话召回一致）。点击来源标签可快速筛选。</p>
+    <div class="mem-add-row">
+      <input id="mem-add-text" type="text" placeholder="手动新增一条事实（如：用户主要用 Python）" autocomplete="off">
+      <button type="button" id="btn-mem-add" class="btn-primary">＋ 添加</button>
+    </div>
+    <div class="mem-toolbar">
+      <input id="mem-search" type="search" placeholder="🔍 搜索记忆内容…" autocomplete="off">
+      <select id="mem-source-filter" title="按来源筛选">
+        <option value="">全部来源</option>
+        <option value="tool:remember">agent 主动记住</option>
+        <option value="manual">手动添加</option>
+        <option value="session_summary">会话总结</option>
+        <option value="consolidated">已聚合</option>
+        <option value="legacy">迁移旧数据</option>
+      </select>
+      <select id="mem-sort" title="排序方式">
+        <option value="newest">最近更新优先</option>
+        <option value="oldest">最早优先</option>
+      </select>
+      <button type="button" id="btn-refresh" class="btn-small">刷新</button>
+    </div>
+    <div id="mem-stats" class="mem-stats"></div>
+    <div id="mem-list"></div>
+  </section>
+
+  <!-- ⚠️ 危险操作：独立分区，不与常用操作混排 -->
+  <section class="card mem-danger-card">
+    <h3>⚠️ 危险操作 <span class="badge badge-orange">不可逆</span></h3>
+    <div class="mem-danger-row">
+      <span class="hint" id="danger-hint"></span>
+      <button type="button" id="btn-clear-all" class="danger">🗑️ 清除全部记忆</button>
+    </div>
+  </section>
+</div>
+
+<!-- 聚合设置弹窗（原生 dialog，主题复用 main.css 的 .dlg） -->
+<dialog id="cfg-overlay" class="dlg mem-dlg">
+  <h3>⚙️ 聚合设置</h3>
+  <p class="hint">默认不自动聚合。开启后，后台会按配置自动整合记忆，减少碎片化打扰。</p>
+  <label class="mem-bool-row"><span>启用后台自动聚合</span>
+    <input type="checkbox" id="cfg-auto"></label>
+  <label>聚合间隔（小时）
+    <input id="cfg-interval" type="number" min="1" value="24"></label>
+  <label>触发阈值（条数）
+    <input id="cfg-threshold" type="number" min="1" value="20"></label>
+  <p class="hint" id="cfg-last"></p>
+  <div class="dlg-actions">
+    <button type="button" id="btn-cfg-close">关闭</button>
+    <button type="button" id="btn-cfg-save" class="btn-primary">保存</button>
+  </div>
+</dialog>
+
+<!-- 恢复备份弹窗 -->
+<dialog id="restore-overlay" class="dlg mem-dlg">
+  <h3>↩️ 恢复备份</h3>
+  <p class="hint">每次聚合前会自动备份。选择一个备份恢复（恢复前当前记忆也会被备份）。</p>
+  <div id="restore-list" class="mem-backup-list"></div>
+  <div class="dlg-actions">
+    <button type="button" id="btn-restore-close">关闭</button>
+  </div>
+</dialog>
+{% endblock %}
+{% block scripts %}
+<script>
+const API = '/api/memory';
+let allMems = [];       // 全量缓存：搜索/筛选/排序在本地做
+let editingId = null;   // 正在内联编辑的记忆 id
+let backupCache = [];
+
+// ---------- 数据加载 ----------
+async function loadMem(){
+  const box = document.getElementById('mem-list');
+  try{
+    const r = await fetch(API);
+    const {memories} = await r.json();
+    allMems = memories || [];
+    renderStats(); renderList();
+  }catch(e){
+    box.innerHTML = '<p class="hint">❌ 加载失败，请点上方「刷新」重试。</p>';
+    showToast('记忆列表加载失败', 'error');
+  }
+}
+
+// ---------- 渲染 ----------
+const SOURCE_META = {
+  'tool:remember':   {label:'🛠️ agent 记住'},
+  'manual':          {label:'✍️ 手动添加'},
+  'session_summary': {label:'📝 会话总结', cls:'badge-orange'},
+  'consolidated':    {label:'🧩 已聚合',   cls:'badge-green'},
+  'legacy':          {label:'📦 迁移数据'},
+};
+function srcMeta(s){ return SOURCE_META[s] || {label:s || '未知来源'}; }
+
+function fmtTime(ts){
+  if(!ts) return '';
+  const d = new Date(ts*1000);
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if(diff < 60) return '刚刚';
+  if(diff < 3600) return Math.floor(diff/60) + ' 分钟前';
+  if(diff < 86400) return Math.floor(diff/3600) + ' 小时前';
+  if(diff < 86400*30) return Math.floor(diff/86400) + ' 天前';
+  return d.toLocaleDateString();
+}
+
+function filteredMems(){
+  const q = document.getElementById('mem-search').value.trim().toLowerCase();
+  const src = document.getElementById('mem-source-filter').value;
+  const dir = document.getElementById('mem-sort').value === 'oldest' ? 1 : -1;
+  const t = m => m.updated_at || m.created_at || 0;
+  return allMems
+    .filter(m => (!src || m.source === src)
+              && (!q || String(m.memory||'').toLowerCase().includes(q)))
+    .sort((a,b) => dir * (t(a) - t(b)));
+}
+
+// P2-24 同版全字符集转义：记忆内容/来源/备份名均为用户可控，拼 innerHTML 前必须转义
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function renderStats(){
+  const el = document.getElementById('mem-stats');
+  const cur = document.getElementById('mem-source-filter').value;
+  const counts = {};
+  for(const m of allMems){ const s = m.source || ''; counts[s] = (counts[s]||0)+1; }
+  let html = `<span class="stat-chip ${!cur?'active':''}" data-src="">全部 ${allMems.length}</span>`;
+  for(const [s,n] of Object.entries(counts)){
+    html += `<span class="stat-chip ${cur===s?'active':''}" data-src="${escapeHtml(s)}">${srcMeta(s).label} ${n}</span>`;
+  }
+  el.innerHTML = html;
+  document.getElementById('mem-total-badge').textContent = `共 ${allMems.length} 条`;
+  const projOwned = allMems.filter(m => (m.project || '') !== '').length;
+  document.getElementById('danger-hint').textContent =
+    `清除将只删除当前项目的 ${projOwned} 条记忆；全局记忆（${allMems.length - projOwned} 条，所有项目共享）保留。`;
+}
+
+function renderList(){
+  const box = document.getElementById('mem-list');
+  const items = filteredMems();
+  document.getElementById('mem-count').textContent =
+    allMems.length ? `· 显示 ${items.length} / 共 ${allMems.length} 条` : '';
+  if(!allMems.length){
+    box.innerHTML = '<p class="hint">当前项目空间还没有记忆。在对话里让 agent「记住…」，或点上方添加。</p>';
+    return;
+  }
+  if(!items.length){
+    box.innerHTML = '<p class="hint">没有匹配的记忆——换个关键词，或清空搜索/筛选条件。</p>';
+    return;
+  }
+  box.innerHTML = items.map(m=>{
+    const sm = srcMeta(m.source);
+    const ts = m.updated_at || m.created_at || 0;
+    const when = m.updated_at ? `更新于 ${fmtTime(m.updated_at)}`
+              : (m.created_at ? `记录于 ${fmtTime(m.created_at)}` : '');
+    const body = editingId === m.id
+      ? `<textarea id="edit-box" class="mem-edit-box">${escapeHtml(m.memory)}</textarea>
+         <div class="mem-actions mem-actions--edit">
+           <button data-act="save" class="btn-small btn-primary">保存</button>
+           <button data-act="cancel" class="btn-small">取消</button>
+         </div>`
+      : `<div class="mem-text">${escapeHtml(m.memory)}</div>`;
+    const proj = m.project ? `<span class="badge">📁 ${escapeHtml(m.project)}</span>` : `<span class="badge">🌐 全局</span>`;
+    const meta = `<div class="mem-meta">
+        <span class="badge ${sm.cls||''}">${escapeHtml(sm.label)}</span>
+        ${proj}
+        <span class="hint" title="${escapeHtml(new Date(ts*1000).toLocaleString())}">${escapeHtml(when)}</span>
+      </div>`;
+    return `<div class="mem-item mem-row" data-id="${escapeHtml(m.id)}">
+      <div class="mem-body">${body}${editingId===m.id?'':meta}</div>
+      ${editingId===m.id ? '' : `<div class="mem-actions">
+        <button data-act="edit" class="btn-small" title="修正这条记忆">✏️ 编辑</button>
+        <button data-act="del" class="btn-small" title="删除这条记忆">🗑️ 删除</button>
+      </div>`}
+    </div>`;
+  }).join('');
+}
+
+// ---------- 列表交互（事件委托） ----------
+async function delMem(id){
+  const mem = allMems.find(m=>m.id===id);
+  const snippet = String(mem?.memory||'').slice(0, 60);
+  const ok = await uiConfirm({
+    title: '删除这条记忆',
+    body: `「${snippet}${(mem?.memory||'').length>60?'…':''}」`,
+    danger: true,
+  });
+  if(!ok) return;
+  const r = await fetch(`${API}/${encodeURIComponent(id)}`, {method:'DELETE'});
+  if(r.ok){ showToast('已删除'); loadMem(); }
+  else{ const e = await r.json().catch(()=>({})); showToast('删除失败：'+(e.detail||''), 'error'); }
+}
+async function saveEdit(id, row){
+  const text = row.querySelector('#edit-box').value.trim();
+  if(!text){ showToast('内容不能为空', 'error'); return; }
+  const r = await fetch(`${API}/${encodeURIComponent(id)}`, {
+    method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content:text})
+  });
+  if(r.ok){ editingId = null; showToast('已保存'); loadMem(); }
+  else{ const e = await r.json().catch(()=>({})); showToast('保存失败：'+(e.detail||''), 'error'); }
+}
+document.getElementById('mem-list').addEventListener('click', e=>{
+  const btn = e.target.closest('button[data-act]');
+  if(!btn) return;
+  const row = btn.closest('.mem-row');
+  const id = row.dataset.id;
+  if(btn.dataset.act==='del') delMem(id);
+  else if(btn.dataset.act==='edit'){ editingId = id; renderList(); }
+  else if(btn.dataset.act==='cancel'){ editingId = null; renderList(); }
+  else if(btn.dataset.act==='save') saveEdit(id, row);
+});
+
+// ---------- 工具条交互（切换时放弃未保存的编辑） ----------
+document.getElementById('mem-search').addEventListener('input', ()=>{ editingId=null; renderList(); });
+document.getElementById('mem-source-filter').addEventListener('change', ()=>{ editingId=null; renderStats(); renderList(); });
+document.getElementById('mem-sort').addEventListener('change', ()=>{ editingId=null; renderList(); });
+document.getElementById('btn-mem-add').addEventListener('click', async ()=>{
+  const inp = document.getElementById('mem-add-text');
+  const text = inp.value.trim();
+  if(!text){ showToast('内容不能为空', 'error'); return; }
+  const r = await fetch(API, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({content:text})});
+  if(r.ok){ inp.value=''; showToast('已添加'); loadMem(); }
+  else { const e = await r.json().catch(()=>({})); showToast('添加失败：'+(e.detail||''), 'error'); }
+});
+document.getElementById('btn-refresh').addEventListener('click', ()=>{ editingId=null; loadMem(); });
+document.getElementById('mem-stats').addEventListener('click', e=>{
+  const chip = e.target.closest('.stat-chip');
+  if(!chip) return;
+  document.getElementById('mem-source-filter').value = chip.dataset.src;
+  editingId = null; renderStats(); renderList();
+});
+async function clearMem(){
+  const projOwned = allMems.filter(m => (m.project || '') !== '').length;
+  if(!projOwned){ showToast('当前项目没有绑定记忆（列表里其余为全局共享记忆，不受项目级清除影响）'); return; }
+  // 最高危：要求输入项目记忆条数（数字）解锁确认按钮，防误触
+  const ok = await uiConfirm({
+    title: '清空项目记忆',
+    body: `确定清除当前项目的 ${projOwned} 条记忆？不可逆！`,
+    okText: '清空',
+    danger: true,
+    requireText: String(projOwned),
+    note: '全局共享记忆不受影响',
+  });
+  if(!ok) return;
+  await fetch(API, {method:'DELETE'});
+  loadMem();
+}
+document.getElementById('btn-clear-all').addEventListener('click', clearMem);
+
+// ---------- 聚合 ----------
+let pollTimer = null;
+async function consolidate(){
+  const btn = document.getElementById('btn-consolidate');
+  btn.disabled = true; btn.textContent = '聚合中…';
+  const st = document.getElementById('consolidate-status');
+  st.hidden = false; st.textContent = '⏳ 正在聚合记忆（LLM 整合，约需 10-30 秒）…';
+  try{
+    const r = await fetch(`${API}/consolidate`, {method:'POST'});
+    const {run_id} = await r.json();
+    if(!run_id){ st.textContent = '❌ 提交失败'; btn.disabled=false; btn.textContent='🔄 聚合记忆'; return; }
+    pollStatus(run_id);
+  }catch(e){
+    st.textContent = '❌ 网络错误：'+e.message;
+    btn.disabled = false; btn.textContent = '🔄 聚合记忆';
+  }
+}
+function pollStatus(runId){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async ()=>{
+    try{
+      const r = await fetch(`${API}/consolidate/status?run_id=${encodeURIComponent(runId)}`);
+      if(r.status === 404){
+        clearInterval(pollTimer); pollTimer = null;
+        const btn = document.getElementById('btn-consolidate');
+        btn.disabled = false; btn.textContent = '🔄 聚合记忆';
+        document.getElementById('consolidate-status').textContent = '❌ 聚合任务不存在';
+        return;
+      }
+      const d = await r.json();
+      if(d.status === 'running') return;
+      clearInterval(pollTimer); pollTimer = null;
+      const btn = document.getElementById('btn-consolidate');
+      btn.disabled = false; btn.textContent = '🔄 聚合记忆';
+      const st = document.getElementById('consolidate-status');
+      const res = d.result || {};
+      if(res.ok){
+        st.textContent = `✅ 聚合完成：${res.before_count} → ${res.after_count} 条` +
+          (res.backup_name ? `（备份 ${res.backup_name}）` : '');
+        showToast('记忆聚合完成');
+      } else if(res.error === 'too_few'){
+        st.textContent = 'ℹ️ 记忆太少，无需聚合';
+      } else if(res.error === 'llm_failed'){
+        st.textContent = '❌ LLM 整合失败，记忆未改动';
+        showToast('聚合失败：LLM 返回异常', 'error');
+      } else {
+        st.textContent = '❌ 聚合失败：'+(res.error||'未知错误');
+      }
+      loadMem();
+    }catch(e){ /* 网络抖动，下次轮询继续 */ }
+  }, 1500);
+}
+document.getElementById('btn-consolidate').addEventListener('click', consolidate);
+
+// ---------- 聚合设置（原生 dialog） ----------
+const cfgDlg = document.getElementById('cfg-overlay');
+async function openConfig(){
+  try{
+    const r = await fetch(`${API}/consolidate/config`);
+    const c = await r.json();
+    document.getElementById('cfg-auto').checked = !!c.auto_consolidate;
+    document.getElementById('cfg-interval').value = c.interval_hours ?? 24;
+    document.getElementById('cfg-threshold').value = c.threshold ?? 20;
+    document.getElementById('cfg-last').textContent =
+      c.last_run_at ? `上次自动聚合：${c.last_run_at}` : '尚未自动聚合过';
+  }catch(e){ showToast('读取配置失败', 'error'); }
+  cfgDlg.showModal();
+}
+function closeConfig(){ cfgDlg.close(); }
+async function saveConfig(){
+  const body = {
+    auto_consolidate: document.getElementById('cfg-auto').checked,
+    interval_hours: parseInt(document.getElementById('cfg-interval').value, 10) || 24,
+    threshold: parseInt(document.getElementById('cfg-threshold').value, 10) || 20,
+  };
+  try{
+    await fetch(`${API}/consolidate/config`, {
+      method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+    showToast('设置已保存');
+    closeConfig();
+  }catch(e){ showToast('保存失败', 'error'); }
+}
+document.getElementById('btn-consolidate-cfg').addEventListener('click', openConfig);
+document.getElementById('btn-cfg-close').addEventListener('click', closeConfig);
+document.getElementById('btn-cfg-save').addEventListener('click', saveConfig);
+
+// ---------- 恢复备份（原生 dialog） ----------
+const restoreDlg = document.getElementById('restore-overlay');
+async function openRestore(){
+  const list = document.getElementById('restore-list');
+  list.innerHTML = '<p class="hint">加载中…</p>';
+  restoreDlg.showModal();
+  try{
+    const r = await fetch(`${API}/backups`);
+    const {backups} = await r.json();
+    backupCache = backups || [];
+    if(!backupCache.length){
+      list.innerHTML = '<p class="hint">暂无备份</p>'; return;
+    }
+    // 备份名不拼进内联事件（encodeURIComponent 不转义单引号），
+    // 按下标渲染，点击时从 backupCache 取 name
+    list.innerHTML = backupCache.map((b,i)=>{
+      const d = new Date((b.mtime||0)*1000).toLocaleString();
+      return `<div class="mem-backup-item">
+        <span class="mem-backup-name">${escapeHtml(b.name)}<br><span class="hint">${escapeHtml(d)}</span></span>
+        <button data-idx="${i}" class="btn-small">恢复</button>
+      </div>`;
+    }).join('');
+  }catch(e){ list.innerHTML = '<p class="hint">加载失败</p>'; }
+}
+function closeRestore(){ restoreDlg.close(); }
+async function doRestore(name){
+  const ok = await uiConfirm({
+    title: '恢复备份',
+    body: `确定恢复 ${name}？`,
+    danger: true,
+    note: '当前记忆会被覆盖（会先自动备份）',
+  });
+  if(!ok) return;
+  try{
+    const r = await fetch(`${API}/backups/restore`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name})
+    });
+    if(r.ok){ showToast('已恢复'); closeRestore(); loadMem(); }
+    else { const e = await r.json().catch(()=>({})); showToast('恢复失败：'+(e.detail||''), 'error'); }
+  }catch(e){ showToast('恢复失败', 'error'); }
+}
+document.getElementById('btn-open-restore').addEventListener('click', openRestore);
+document.getElementById('btn-restore-close').addEventListener('click', closeRestore);
+// 点遮罩关闭弹窗（原生 dialog：点击落在 dialog 元素自身 = 遮罩区）
+for(const d of [cfgDlg, restoreDlg]){
+  d.addEventListener('click', e=>{ if(e.target === d) d.close(); });
+}
+// 恢复列表按钮（事件委托，一次性注册）
+document.getElementById('restore-list').addEventListener('click', e=>{
+  const btn = e.target.closest('button[data-idx]');
+  if(btn) doRestore(backupCache[Number(btn.dataset.idx)]?.name);
+});
+
+loadMem();
+</script>
+{% endblock %}

@@ -1,0 +1,25 @@
+name: respawn_self
+description: >
+  自进化收尾：让 worker 进程在本轮对话结束后干净退出，下一条消息自动
+  拉起新进程、加载全部新代码（源码 / 工具 YAML / 技能一次生效，会话
+  无缝续上）。前置校验：必须先跑过 verify_self 且通过（防跳步），且
+  仓库指纹与上次验证一致（防并行改动混入）——不满足会被拒绝并提示。
+  CLI 环境下会降级为"请退出重启"提示。调用后立即收尾本轮流，不要再
+  发起新的长任务。
+
+parameters:
+  type: object
+  properties: {}
+  additionalProperties: false
+
+runtime:
+  type: python
+  module: src.tools.self_evolve
+  function: _execute_respawn_self
+
+side_effects:
+  destructive: true           # 会终止当前 worker 进程 → 弹审批卡，人工确认重生
+  writes_state: false
+
+config_guard: self_evolve_enabled   # 自进化工具面出厂默认关，设置页可开
+blocked_in: [employee, subagent]   # 数字员工/子代理不得自改本体或触发重生
