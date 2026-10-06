@@ -67,31 +67,39 @@ function renderMarkdown(text) {
 // ——跨块上下文（loose list 合并 / 引用式链接定义）在终渲回归精确，流式期
 // 为逐块近似。覆盖式重放（EventSource 续流补差重发全轮 token）靠块缓存：
 // 已渲染前缀命中缓存零重渲，只有尾块付出渲染成本。
-function splitMarkdownBlocks(text) {
-  const closed = [];
-  let buf = [];
-  let fence = false, fenceCh = '';   // 围栏内不切（不同围栏字符互不闭合）
-  const lines = String(text).split('\n');
-  for (const ln of lines) {
+// P4-1（切分增量化）：上式的「典型尾块有界」还有个隐含前提——每 flush 全文
+// 重切 split('\n') 是 O(全文)。token 流只追加，改为有状态切分器：跨 flush
+// 保留已处理偏移与围栏状态，每次只切新增的完整行，稳态成本 O(新增+尾块)，
+// 与全文长度解耦；前缀失配由 stream() 的 startsWith 校验兜底回退全量重切。
+// P4-2（尾块限长）：长代码围栏/长表格/无空行长段落会全堆进尾块且无界增长，
+// 「尾块有界」被打破、重渲退化回 O(n²)。尾块超 TAIL_CAP 降级：溢出头部以
+// textContent 纯文本占位（零解析、不进缓存），仅最后 TAIL_KEEP 字符走
+// renderMarkdown；块边界出现后尾块缩回正常路径，complete 终渲自然自愈。
+// P4-1 切分核心：只吃「完整行」，跨 flush 携带围栏状态机与未闭合块行缓冲。
+// state = {fence, fenceCh, buf}，本次新切出的闭合块追加进 newClosed。
+// 围栏内不切（不同围栏字符互不闭合）的规则与原 splitMarkdownBlocks 一致。
+function _feedLines(lines, state, newClosed) {
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
     const m = ln.match(/^ {0,3}(`{3,}|~{3,})/);
     if (m) {
-      if (!fence) { fence = true; fenceCh = m[1][0]; }
-      else if (m[1][0] === fenceCh) { fence = false; fenceCh = ''; }
+      if (!state.fence) { state.fence = true; state.fenceCh = m[1][0]; }
+      else if (m[1][0] === state.fenceCh) { state.fence = false; state.fenceCh = ''; }
     }
-    if (!fence && ln.trim() === '') {
-      if (buf.length) { closed.push(buf.join('\n')); buf = []; }
+    if (!state.fence && ln.trim() === '') {
+      if (state.buf.length) { newClosed.push(state.buf.join('\n')); state.buf = []; }
       continue;   // 连续空行折叠
     }
-    buf.push(ln);
+    state.buf.push(ln);
   }
-  return { closed, tail: buf.join('\n') };
 }
 
-function _lensSum(blocks, n) {
-  let s = 0;
-  for (let i = 0; i < n && i < blocks.length; i++) s += blocks[i].length;
-  return s;
-}
+// P4-2 尾块限长阈值：超过 TAIL_CAP 即降级，尾部 TAIL_KEEP 字符仍走 markdown
+// 渲染（光标 ▌ 与最新输出保持正常观感），溢出头部纯文本占位。8192 对应
+// marked.parse + DOMParser 消毒在低端机上的单帧预算上限，2000 保证降级后
+// 渲染成本仍有 4 倍余量。
+const TAIL_CAP = 8192;
+const TAIL_KEEP = 2000;
 
 function createBlockRenderer(mount) {
   const doneEl = document.createElement('div');
@@ -102,8 +110,6 @@ function createBlockRenderer(mount) {
   mount.appendChild(doneEl);
   mount.appendChild(tailEl);
   const cache = new Map();   // 块原文 → 渲染 HTML（随渲染器整体丢弃）
-  let rendered = [];         // 已上 DOM 的闭合块原文（append-only 前缀判定）
-  let renderedLen = 0;       // rendered 各块长度和（快速前缀校验）
   const appendBlock = (block) => {
     let html = cache.get(block);
     if (html === undefined) { html = renderMarkdown(block); cache.set(block, html); }
@@ -112,28 +118,69 @@ function createBlockRenderer(mount) {
     div.innerHTML = html;
     doneEl.appendChild(div);
   };
+  // P4-1 切分器状态（跨 flush 持有）：sp 是围栏状态机 + 未闭合块行缓冲，
+  // procLen = 已喂入切分器的字符数（只推进到完整行的行尾），lastText = 上次
+  // flush 的全文引用（前缀失配检测用；持引用不持拷贝）。
+  const sp = { fence: false, fenceCh: '', buf: [] };
+  let procLen = 0;
+  let lastText = '';
+  // 喂入 [procLen, 最后一个 '\n') 之间的完整行，返回本次新闭合的块。
+  // 未完的尾行留在 partial 区不进状态机——半行先入 buf、续上后再切会产出
+  // "hel\nlo" 之类的错块；等凑齐整行（出现下一个 '\n'）再喂，切分结果与
+  // 全量重切逐字节一致。
+  const feedNewLines = (text) => {
+    const newClosed = [];
+    const lastNl = text.lastIndexOf('\n');
+    if (lastNl < procLen) return newClosed;   // 新增区没有完整行（尾行续长中）
+    _feedLines(text.slice(procLen, lastNl).split('\n'), sp, newClosed);
+    procLen = lastNl + 1;
+    return newClosed;
+  };
   return {
     mount, doneEl, tailEl,   // doneEl/tailEl 供 _ensureBlockRenderer 做在文档内校验
-    // 覆盖式渲染累积全文：token 流只追加 → 闭合块前缀稳定，仅追加新块 +
-    // 重渲尾块；前缀失配（写入另一段文本，如 renderHistory 复用气泡跨消息
-    // 覆盖）→ 清空重建（缓存保留，同文块命中免重渲）
+    // 覆盖式渲染累积全文：token 流只追加 → 稳态仅切新增行 + 追加新闭合块 +
+    // 重渲尾块（旧版在此处全量 split('\n')，已由 feedNewLines 取代；块级前缀
+    // 校验 rendered/_lensSum 一并退役——字符级 startsWith 是其充分条件，没有
+    // 块级失配能逃过字符级校验）；前缀失配（写入另一段文本，如 renderHistory
+    // 复用气泡跨消息覆盖、tool_start 落白改写尾部）→ 清空重建（缓存保留，
+    // 同文块命中免重渲）。校验成本是 O(旧文) 的 memcmp（不分配、GB/s 级），
+    // 远轻于被它替代的每 flush 全量 split；text 变短必触发一次重建——O(全文)
+    // 每轮至多一两次，而旧实现是每 flush 一次。
     stream(text, cursor) {
-      const { closed, tail } = splitMarkdownBlocks(text);
-      const n = closed.length, r = rendered.length;
-      const prefixOk = n >= r && (r === 0 ||
-        (_lensSum(closed, r) === renderedLen && closed[r - 1] === rendered[r - 1]));
-      if (prefixOk) {
-        for (let i = r; i < n; i++) { appendBlock(closed[i]); renderedLen += closed[i].length; }
-        rendered = closed.slice();
-      } else {
+      text = String(text);
+      if (procLen > 0 && (text.length < lastText.length || !text.startsWith(lastText))) {
         doneEl.textContent = '';
-        rendered = []; renderedLen = 0;
-        for (const b of closed) { appendBlock(b); renderedLen += b.length; }
-        rendered = closed.slice();
+        sp.fence = false; sp.fenceCh = ''; sp.buf = [];
+        procLen = 0;
       }
-      // 光标 ▌ 只放尾块（文本恰以块边界结尾时尾块为空 → 光标独立成段，
+      lastText = text;
+      const newClosed = feedNewLines(text);
+      for (let i = 0; i < newClosed.length; i++) appendBlock(newClosed[i]);
+      // 尾块 = 未闭合块行缓冲 + 未凑齐整行的尾部片段（slice 是引擎引用切片，
+      // 不拷贝）。片段不进状态机，等凑齐整行再切——切分结果与全量重切逐字节一致
+      const partial = text.slice(procLen);
+      let tail = sp.buf.join('\n');
+      if (partial) tail = tail ? tail + '\n' + partial : partial;
+      // 光标 ▌ 只放活动尾部（文本恰以块边界结尾时尾块为空 → 光标独立成段，
       // 与旧「全文 HTML + ▌」在块边界后的视觉表现一致）
-      tailEl.innerHTML = renderMarkdown(tail + (cursor ? '▌' : ''));
+      if (tail.length > TAIL_CAP) {
+        // P4-2 降级：溢出头部 textContent 纯文本占位（不解析不消毒不进缓存，
+        // 降级期视觉折损：围栏中途被截进纯文本区显示为素文本），只重渲最后
+        // TAIL_KEEP 字符；块边界出现后尾块缩回正常路径，complete 终渲自愈
+        let cut = tail.length - TAIL_KEEP;
+        const nl = tail.indexOf('\n', cut);
+        if (nl !== -1) cut = nl + 1;   // 对齐行首：别把表格行/行内标记劈成两半
+        const raw = document.createElement('div');
+        raw.className = 'blk-tail-raw';
+        raw.textContent = tail.slice(0, cut);
+        const live = document.createElement('div');
+        live.innerHTML = renderMarkdown(tail.slice(cut) + (cursor ? '▌' : ''));
+        tailEl.textContent = '';
+        tailEl.appendChild(raw);
+        tailEl.appendChild(live);
+      } else {
+        tailEl.innerHTML = renderMarkdown(tail + (cursor ? '▌' : ''));
+      }
     },
   };
 }

@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -182,6 +183,45 @@ class SessionLog:
         """
         return self.provider.append_event(sid_scope(session_id), session_id, type_, payload)
 
+    def append_events_bulk(self, session_id: str, items: list[tuple[str, dict]]) -> int:
+        """单事务批量追加事件（fork 复制热路径），返回写入条数。
+
+        逐条 append 在 autocommit（isolation_level=None）下每行一个事务
+        （N 次抢锁 + N 次 WAL 落盘），fork 大会话时是秒级热点；本方法
+        一次锁 + 显式 BEGIN IMMEDIATE..COMMIT 一把写完（sqlite_provider
+        连接注释钦定的多语句模式），payload 序列化与 append_event 同款
+        （ensure_ascii=False，ts 逐条 time.time()）。
+
+        provider 非 SQLiteProvider（自定义实现/测试替身，无 _conn 内部
+        结构）或 items 为空 → 逐条退化 append（语义等价，降级安全）。
+        """
+        if not items:
+            return 0
+        conn = getattr(self.provider, "_conn", None)
+        lock = None
+        if conn is not None:
+            from src.storage.sqlite_provider import SQLiteProvider, _LOCK
+            if isinstance(self.provider, SQLiteProvider):
+                lock = _LOCK   # 与 provider 各方法同一互斥锁（check_same_thread=False 共享连接）
+        if lock is None:
+            for type_, payload in items:
+                self.append(session_id, type_, payload)
+            return len(items)
+        scope = sid_scope(session_id)
+        rows = [(scope, session_id, t, json.dumps(p, ensure_ascii=False), time.time())
+                for t, p in items]
+        with lock:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.executemany(
+                    "INSERT INTO events(scope, session_id, type, payload, ts) "
+                    "VALUES(?, ?, ?, ?, ?)", rows)
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        return len(rows)
+
     def events(self, session_id: str) -> list[dict]:
         """该会话的全部事件（id 升序）。每行 {id, scope, session_id, type, payload, ts}。
 
@@ -271,6 +311,85 @@ class SessionLog:
         for e in hot:
             merged[e["id"]] = e
         return [merged[k] for k in sorted(merged)]
+
+    def last_event(self, session_id: str) -> dict | None:
+        """该会话最后一条事件的轻量视图 {type, ts}（无事件返回 None）。
+
+        会话恢复轮询（GET /api/sessions/{sid}/last_event）专用：events()/
+        load_events_with_archive 是全表扫描 + 逐行 json.loads + 冷归档
+        整读，3s 级轮询不可承受；这里热表走 ORDER BY id DESC LIMIT 1
+        （idx_events_scope_sid(scope, session_id, id) 索引点查），双 scope
+        各取一行取 id 大者（对齐 events() 的 R3-16 兼容语义）；热表空但
+        冷归档非空时取归档末条（归档 id 升序 → 末个非空行，尾部增量读
+        不整读文件）。热表非空时末条必新于任何归档行（归档只搬
+        COMPACT_APPLIED 之前的行，compact 事件本身永远留热表），故热表
+        优先即全局末条。只返回 type/ts，绝不加载 payload 全量。
+        """
+        hot = self._last_hot_event(session_id)
+        if hot is not None:
+            return {"type": hot["type"], "ts": hot["ts"]}
+        cold = self._read_archive_last(session_id)
+        if cold is not None:
+            return {"type": cold.get("type", ""), "ts": cold.get("ts", 0)}
+        return None
+
+    def _last_hot_event(self, session_id: str):
+        """热表 id 最大的单行（双 scope 取大）；非 SQLite provider 返回 None。
+
+        storage 层不在本次改动范围（无 last-event 原语可调）——
+        SQLiteProvider 直连其 _conn 并复用模块级 _LOCK（与 iter_events
+        同一互斥模式，连接 check_same_thread=False 共享 + 行工厂
+        sqlite3.Row）；自定义 provider/测试替身没有该内部结构 → 返回
+        None（上层再探冷归档，仍无则按"无事件"处理，保守收敛）。
+        """
+        conn = getattr(self.provider, "_conn", None)
+        if conn is None:
+            return None
+        from src.storage.sqlite_provider import SQLiteProvider, _LOCK
+        if not isinstance(self.provider, SQLiteProvider):
+            return None
+        sql = ("SELECT id, type, ts FROM events "
+               "WHERE scope=? AND session_id=? ORDER BY id DESC LIMIT 1")
+        best = None
+        with _LOCK:
+            for scope in (SCOPE_CHAT, SCOPE_WAKER):
+                row = conn.execute(sql, (scope, session_id)).fetchone()
+                if row is not None and (best is None or row["id"] > best["id"]):
+                    best = row
+        return best
+
+    def _read_archive_last(self, session_id: str) -> dict | None:
+        """冷归档文件的最后一条事件（末个非空行），尾部增量读不整读文件。
+
+        与 _read_archive 容错同构：sid 不适合落冷文件/文件不存在/OSError/
+        末行损坏（崩溃窗口半截行）→ None。归档写侧保证 id 升序，末行即
+        最后事件；从文件尾逐块向前找行边界，长行（大 kept_messages）也
+        能完整取到。末行损坏按无冷区处理（保守：上层判"无事件"）。
+        """
+        if not _archive_sid_ok(session_id):
+            return None
+        path = self.archive_path(session_id)
+        try:
+            with path.open("rb") as f:
+                f.seek(0, os.SEEK_END)
+                pos = f.tell()
+                tail = b""
+                while pos > 0:
+                    step = min(8192, pos)
+                    pos -= step
+                    f.seek(pos)
+                    tail = f.read(step) + tail
+                    # 已越过文件起点，或已见到行边界（末行完整在手）→ 停
+                    if pos == 0 or b"\n" in tail:
+                        break
+            lines = [ln for ln in tail.splitlines() if ln.strip()]
+            if not lines:
+                return None
+            ev = json.loads(lines[-1].decode("utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            logger.warning(f"冷归档末行读取失败（按无冷区处理）: {path}", exc_info=True)
+            return None
+        return ev if isinstance(ev, dict) and "id" in ev else None
 
     def archive_compacted_events(self, session_id: str) -> int:
         """把最后 COMPACT_APPLIED 之前的热事件导出冷文件并从热表删除。

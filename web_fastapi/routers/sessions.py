@@ -3,6 +3,8 @@
 例外（T9 事件流 API，主进程直接读 ctx.sessions，不经 worker）：
   - GET  /{session_id}/events：会话事件流（冷归档合并视图，见
          SessionLog.load_events_with_archive）
+  - GET  /{session_id}/last_event：最后一条事件轻量视图（恢复轮询用，
+         只取热表末行/归档末条，见 SessionLog.last_event）
   - POST /{session_id}/fork：事件流复制成新会话（Trajectory 数据基础）
 
 经 worker IPC 的 handler 一律声明为同步 def（P2-11，memory.py:8-10 同一
@@ -10,6 +12,11 @@
 get_or_create（spawn 最长 60s，P2-13）——async def 里调它们会把整个
 uvicorn 事件循环卡住（主槽 chat 流式持锁期间全站停摆）；同步 def 由
 FastAPI 丢进线程池执行，事件循环不再被阻塞。
+
+本文件的主进程直读端点同样是同步 def（同一 P2-11 规则）：events 的
+load_events_with_archive（SQLite 全表扫描 + 逐行 json.loads + 冷归档
+整读）、会话列表的 glob + 逐快照 json.load、fork 的全量读 + 逐事件写
+（单事务批量）都是秒级阻塞调用，一律丢线程池执行。
 """
 import logging
 import uuid
@@ -60,9 +67,13 @@ def _busy_if_timeout(op: str, exc: Exception):
 
 
 @router.get("")
-async def list_user_sessions(project: str | None = None):
+def list_user_sessions(project: str | None = None):
     """M5：主进程直读磁盘快照（不经 worker 锁）——AI 回复期间侧栏/会话页
-    依旧可用，消灭高频 503。"""
+    依旧可用，消灭高频 503。
+
+    P2-11：glob + 逐快照 json.load 全文是阻塞调用——同步 def 由 FastAPI
+    丢进线程池执行，会话多时事件循环不再被侧栏刷新卡住。
+    """
     if project is not None:
         validate_id(project, "项目标识")
     from src.session_store import list_sessions
@@ -245,7 +256,7 @@ def _sessions_log(request: Request):
 
 
 @router.get("/{session_id}/events")
-async def get_session_events(
+def get_session_events(
     request: Request,
     session_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -257,11 +268,35 @@ async def get_session_events(
     升序返回——与归档前的 events() 逐条等价；未归档时即 events() 原样。
     无事件返回空列表。仅 chat 会话：sid 含 ":"（waker:/wakerflow: 无人
     值守任务流）被 validate_id 拒绝（400）。
+
+    P2-11：全表扫描 + 逐行 json.loads + 冷归档 JSONL 整读是秒级阻塞
+    调用——同步 def 由 FastAPI 丢进线程池（函数体无 await，直接改声明）。
     """
     session_id = validate_id(session_id, "会话 ID")
     log = _sessions_log(request)
     return {"session_id": session_id,
             "events": log.load_events_with_archive(session_id)}
+
+
+@router.get("/{session_id}/last_event")
+def get_session_last_event(
+    request: Request,
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """最后一条事件的轻量视图（会话恢复轮询专用，P2-11 同步 def 线程池）。
+
+    返回 {"session_id": ..., "last_event": {type, ts} | null}——只取热表
+    末行（冷归档末条兜底），绝不加载全量事件流（SessionLog.last_event）。
+    前端 _activeRetryEligible 以 3s×6 轮询本端点判定"是否值得重试 /active
+    探测"，替代此前每次轮询触发 /events 全表扫描的用法。sid 含 ":"
+    （waker:/wakerflow:）被 validate_id 拒绝（400），与 events 端点同一
+    拒绝语义。
+    """
+    session_id = validate_id(session_id, "会话 ID")
+    log = _sessions_log(request)
+    return {"session_id": session_id,
+            "last_event": log.last_event(session_id)}
 
 
 class ResetBody(BaseModel):
@@ -320,7 +355,7 @@ def _generate_new_sid(log) -> str:
 
 
 @router.post("/{session_id}/fork")
-async def fork_session(
+def fork_session(
     request: Request,
     session_id: str,
     body: ForkBody | None = None,
@@ -329,8 +364,13 @@ async def fork_session(
     """把会话事件流复制成新会话（缺省全量复制，可按事件 id 截断）。
 
     语义：生成 new_sid（占用则重生成，最多 5 次）→ 旧 sid 事件按截断点
-    过滤后逐条 append 到 new_sid（保序、payload 原样）→ 写一个 JSON 快照
+    过滤后批量 append 到 new_sid（保序、payload 原样）→ 写一个 JSON 快照
     stub 让会话列表可见 → 返回 {session_id, event_count, up_to_event_id}。
+
+    P2-11：全量事件读 + 逐事件写 + derive 投影都是阻塞调用——函数体无
+    await，整体改同步 def 由 FastAPI 丢进线程池；逐事件 append 改单事务
+    批量写（SessionLog.append_events_bulk，N 次 autocommit 落盘 → 1 次），
+    截断前的源事件总数就地快照（旧实现日志行曾二次全量读，已去）。
 
     截断点（详见 ForkBody 文档字符串）：up_to_event_id 含端点 /
     after_event_id 排他（旧名兼容，R3-19 语义修正）。两者同给时
@@ -348,6 +388,7 @@ async def fork_session(
     # 冷归档合并视图（P3）：截断点落冷区也能切——合并视图与归档前的
     # events() 逐条等价，复制进新流的事件仍完整（payload 原样保序）。
     src_events = log.load_events_with_archive(session_id)
+    src_total = len(src_events)   # 截断前源事件总数（日志行复用，不再二次全量读）
     if body is not None and body.up_to_event_id is not None:
         cutoff = max(0, int(body.up_to_event_id))
         src_events = [e for e in src_events if e["id"] <= cutoff]
@@ -376,8 +417,12 @@ async def fork_session(
             src_events = src_events[:cut_idx]
 
     new_sid = _generate_new_sid(log)
-    for ev in src_events:
-        log.append(new_sid, ev.get("type", ""), ev.get("payload") or {})
+    # 单事务批量写入（P2-11）：逐条 append = 每行一个 autocommit 事务
+    # （N 次抢锁 + N 次落盘），大会话 fork 在执行线程上是秒级热点；批量
+    # 一把写完（非 SQLite provider 自动逐条退化，语义等价）。
+    log.append_events_bulk(
+        new_sid, [(ev.get("type", ""), ev.get("payload") or {})
+                  for ev in src_events])
     actual_up_to = max((e["id"] for e in src_events), default=0)
 
     # JSON 快照 stub：会话列表可见 + 承载 todos/vfs/waker 等非消息状态。
@@ -408,7 +453,7 @@ async def fork_session(
 
     logger.info(
         f"会话 fork: {session_id} → {new_sid} "
-        f"(源事件 {len(log.load_events_with_archive(session_id))} 条，复制 {len(src_events)} 条, name={name!r})"
+        f"(源事件 {src_total} 条，复制 {len(src_events)} 条, name={name!r})"
     )
     return {
         "session_id": new_sid,

@@ -1,8 +1,10 @@
-"""P2-6：_StdoutPump 队列有界（满则丢新行 + 计数 + 绝不阻塞）单测。
+"""P2-6：_StdoutPump 队列有界（满则丢最旧 + 计数 + 绝不阻塞）单测。
 
 契约（web_fastapi/worker_manager._StdoutPump）：
-- 队列有界（默认 STDOUT_QUEUE_MAXSIZE=2000 行），满时丢弃**新行**并累计
-  计数，泵线程绝不阻塞（worker 日志型输出不允许拖死读取）；
+- 队列有界（默认 STDOUT_QUEUE_MAXSIZE=2000 行），满时挤掉**最旧行**腾位并
+  累计计数，泵线程绝不阻塞（worker 日志型输出不允许拖死读取）；
+  P2-26：丢弃策略由「丢新行」演进为「丢最旧」（对齐 chat_bus.put_drop_oldest
+  语义）——满时继续丢新行会把当前请求的 result/done 终态帧丢掉，SSE 假死；
 - 每累计丢满 STDOUT_DROP_WARN_EVERY 条打一条 warning 汇总（不逐行刷日志）；
 - EOF 哨兵必达：队列满时挤掉最旧一行腾位——EOF 丢失会把「worker 已退出」
   误报成响应超时；
@@ -52,9 +54,10 @@ def test_queue_is_bounded_by_default():
     assert pump._q.maxsize == STDOUT_QUEUE_MAXSIZE == 2000
 
 
-def test_full_queue_drops_new_lines_without_blocking():
-    """灌 50 行进 maxsize=10 的队列：泵线程必须立刻消费完流（不阻塞在 put），
-    丢弃 40 行新行、保留最旧 10 行且行序不变。"""
+def test_full_queue_drops_oldest_lines_without_blocking():
+    """P2-26 改写（原断言「满时丢新行、保留最旧行」）：灌 50 行进 maxsize=10
+    的队列：泵线程必须立刻消费完流（不阻塞在 put），丢弃最旧 40 行、保留
+    最新 10 行（line41..line50）且行序不变——终态帧/新行比旧行更有价值。"""
     stream = FakeStream()
     pump = _StdoutPump(stream, maxsize=10)
     for i in range(1, 51):
@@ -63,10 +66,10 @@ def test_full_queue_drops_new_lines_without_blocking():
     # dropped==40 只可能由泵线程逐行消费流产生——计数到位本身就是"未阻塞"的证明
     assert _wait_until(lambda: pump.dropped == 40), f"dropped={pump.dropped}"
     assert pump._q.qsize() == 10
-    # 保留的是最旧行（丢弃新行 → 保序语义"最旧优先"）
-    for i in range(1, 11):
+    # 保留的是最新行（丢最旧 → 对齐 chat_bus.put_drop_oldest 语义）
+    for i in range(41, 51):
         assert pump.get(1.0) == f"line{i}\n"
-    assert pump.get(0.1) is None  # 第 11..50 行已被丢弃，队列里不再有正文
+    assert pump.get(0.1) is None  # line1..line40 已被挤掉，队列里不再有正文
 
 
 def test_eof_survives_full_queue():
@@ -78,7 +81,7 @@ def test_eof_survives_full_queue():
     assert _wait_until(lambda: pump.dropped == 15), f"dropped={pump.dropped}"
 
     stream.close()
-    # 消费端先不读：等泵线程自己完成"挤掉 line1 腾位 → EOF 入队"
+    # 消费端先不读：等泵线程自己完成"挤掉最旧一行腾位 → EOF 入队"
     # （dropped 15→16 即腾位完成的确定性信号），再开始收流——无竞态。
     assert _wait_until(lambda: pump.dropped == 16), f"dropped={pump.dropped}"
     drained = []
@@ -88,9 +91,10 @@ def test_eof_survives_full_queue():
             break
         assert item is not None  # EOF 必达：不能以"超时 None"收尾
         drained.append(item)
-    # line1 为 EOF 腾位被挤掉（计入丢弃）：实际可读的是 line2..line5
-    assert drained == [f"line{i}\n" for i in range(2, 6)]
-    assert pump.dropped == 16  # 15 行刷掉 + line1 为 EOF 腾位
+    # P2-26 丢最旧语义：挤满后队列里是最新 5 行 line16..line20，line16 为
+    # EOF 腾位被挤掉（计入丢弃）——实际可读的是 line17..line20
+    assert drained == [f"line{i}\n" for i in range(17, 21)]
+    assert pump.dropped == 16  # 15 行挤掉 + line16 为 EOF 腾位
 
 
 def test_normal_path_order_eof_and_timeout_unchanged():
@@ -122,6 +126,7 @@ def test_drop_warning_summarizes_every_n(caplog):
         texts = [r.getMessage() for r in caplog.records
                  if r.levelno == logging.WARNING and "丢弃" in r.getMessage()]
         assert len(texts) == 2, texts
-        assert any("已累计丢弃 500 行输出" in t for t in texts)
-        assert any("已累计丢弃 1000 行输出" in t for t in texts)
+        # P2-26：文案同步改为「丢弃最旧 N 行」
+        assert any("已累计丢弃最旧 500 行输出" in t for t in texts)
+        assert any("已累计丢弃最旧 1000 行输出" in t for t in texts)
         assert all("maxsize=10" in t for t in texts)

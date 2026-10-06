@@ -80,8 +80,6 @@ async function loadWakers(){
     const arr = j.wakers || [];
     if(!arr.length){ list.innerHTML = '<p class="hint">暂无 Waker，点上方按钮新建。</p>'; return; }
     list.innerHTML = arr.map(w=>{
-      // 名称做 URL 编码后嵌入 onclick，避免引号/特殊字符破坏 JS 字符串
-      const ne = encodeURIComponent(w.name);
       const tools = (w.tools && w.tools.length) ? w.tools.join(', ') : '全部';
       const runs = w.max_runs ? `${w.run_count||0}/${w.max_runs}` : `${w.run_count||0}`;
       const isActive = w.last_status === 'running' && w.active_run_id;
@@ -108,17 +106,24 @@ async function loadWakers(){
         </div>
         ${activeProgress}
         <div class="waker-actions">
-          <button onclick="toggleEnabled('${ne}', ${!w.enabled})" class="btn-small">${w.enabled?'停用':'启用'}</button>
-          <button onclick="runNow('${ne}')" class="btn-small" ${isActive?'disabled':''}>▶ 立即运行</button>
-          <button onclick="showLogs('${ne}', '${escapeHtml(w.name)}')" class="btn-small">📜 运行记录</button>
-          <button onclick="openEditForm('${ne}')" class="btn-small">✏ 编辑</button>
-          <button onclick="deleteWaker('${ne}', '${escapeHtml(w.name)}')" class="btn-small danger">🗑 删除</button>
+          <!-- P2-26 同规约（照抄 wakerflow.js #flow-list 委托）：w.name 只进
+               data-waker 属性（escapeHtml 防属性逃逸），不进 onclick JS 编译器
+               ——encodeURIComponent 不转义单引号、escapeHtml 只产 HTML 实体，
+               名字含 ' 时属性解码回 ' 后照样闭合 JS 串，按钮失效 -->
+          <button data-waker="${escapeHtml(w.name)}" data-act="toggle" data-waker-enable="${w.enabled ? '0' : '1'}" class="btn-small">${w.enabled?'停用':'启用'}</button>
+          <button data-waker="${escapeHtml(w.name)}" data-act="run" class="btn-small" ${isActive?'disabled':''}>▶ 立即运行</button>
+          <button data-waker="${escapeHtml(w.name)}" data-act="log" class="btn-small">📜 运行记录</button>
+          <button data-waker="${escapeHtml(w.name)}" data-act="edit" class="btn-small">✏ 编辑</button>
+          <button data-waker="${escapeHtml(w.name)}" data-act="delete" class="btn-small danger">🗑 删除</button>
         </div>
       </section>`;
     }).join('');
     // 启动所有活跃 waker 的进度轮询
     arr.filter(w => w.last_status === 'running' && w.active_run_id).forEach(w => {
-      pollWakerProgress(decodeURIComponent(w.name), w.active_run_id);
+      // P2-26：w.name 本就是原始名（JSON 解析产物），再 decodeURIComponent
+      // 会在名字含 % 时抛 URIError，被 loadWakers 外层 catch 吞掉——整个
+      // 列表显示"加载失败"。pollWakerProgress 内部自会 encodeURIComponent。
+      pollWakerProgress(w.name, w.active_run_id);
     });
   } catch(e) {
     list.innerHTML = `<p class="hint">加载失败：${escapeHtml(e.message)}（后端 API 尚未就绪？）</p>`;
@@ -130,7 +135,19 @@ const _wakerPolling = new Set();
 function pollWakerProgress(wakerName, runId) {
   if (_wakerPolling.has(runId)) return;
   _wakerPolling.add(runId);
+  // P2-26 对齐 wakerflow.pollProgress：最多轮询 5 分钟。run 卡在 running 态
+  // （worker 崩溃等）时此前 404 重试与异常重试都永不过期，会永久 2.5s 一次
+  // 轮询下去。超时后原地收尾（不调 loadWakers——列表刷新会对 running waker
+  // 重新拉起轮询，绕过 deadline）。
+  const deadline = Date.now() + 5 * 60 * 1000;
   const tick = async () => {
+    if (Date.now() > deadline) {
+      _wakerPolling.delete(runId);
+      const el = document.getElementById('wprogress-' + runId);
+      if (el) el.innerHTML = '<span style="color:var(--text-secondary)">⏱ 已运行超 5 分钟，停止进度轮询（waker 仍在后台），可用「刷新」/「📜 运行记录」查看</span>';
+      showToast('waker「' + wakerName + '」进度轮询超时（5 分钟），已停止', 'error');
+      return;
+    }
     try {
       const ne = encodeURIComponent(wakerName);
       const r = await fetch(`${API}/items/${ne}/runs/${encodeURIComponent(runId)}`);
@@ -521,6 +538,26 @@ document.querySelector('.run-detail-head').addEventListener('click', e=>{
   const btn = e.target.closest('.run-tab');
   if(!btn) return;
   setRunTab(btn.dataset.tab);
+});
+
+// Waker 卡片按钮（事件委托，一次性注册；#waker-list 在静态 DOM）。
+// P2-26 照抄 wakerflow.js #flow-list 同规约：原 onclick="showLogs('${ne}',
+// '${escapeHtml(w.name)}')" 把 waker 名当 JS 源码编译——encodeURIComponent
+// 不转义单引号、escapeHtml 只管 HTML 上下文（浏览器先把属性值实体解码再当
+// JS 编译，' 解码回 ' 后字符串照常闭合），名字含 ' 时按钮失效。改
+// data-waker + data-act 后名字只作纯数据经 dataset 传递，全程不进 JS
+// 编译器；函数签名沿用 nameEncoded，URL 编码在分发处补做。
+document.getElementById('waker-list').addEventListener('click', e=>{
+  const btn = e.target.closest('button[data-waker]');
+  if(!btn) return;
+  const ne = encodeURIComponent(btn.dataset.waker);
+  switch (btn.dataset.act) {
+    case 'toggle': toggleEnabled(ne, btn.dataset.wakerEnable === '1'); break;
+    case 'run': runNow(ne); break;
+    case 'log': showLogs(ne, btn.dataset.waker); break;
+    case 'edit': openEditForm(ne); break;
+    case 'delete': deleteWaker(ne, btn.dataset.waker); break;
+  }
 });
 
 // 初始加载

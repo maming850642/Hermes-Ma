@@ -50,6 +50,7 @@ web_fastapi（父进程）与 worker_process（子进程）之间是 NDJSON 信�
     session_rename     session_id● name●
     session_delete     session_id●
     session_summary    session_id●
+    session_truncate   session_id● user_ordinal● expect_text●
     tools_list         （无 payload）
     skills_list        （无 payload）
     compact            session_id●
@@ -168,6 +169,17 @@ class SessionSummaryCmd(_CmdEnvelope, total=False):
     """session_summary：按需生成会话总结（Web 侧唯一总结入口）。"""
 
     session_id: str
+
+
+class SessionTruncateCmd(_CmdEnvelope, total=False):
+    """session_truncate：截断到第 user_ordinal 条 user 消息之前（编辑重发前半程）。
+
+    expect_text 为乐观校验：该消息当前文本不符时 worker 侧拒截（400 回前端）。
+    """
+
+    session_id: str
+    user_ordinal: int
+    expect_text: str
 
 
 class ToolsListCmd(_CmdEnvelope, total=False):
@@ -301,6 +313,7 @@ OP_PAYLOAD_TYPES: dict[str, type] = {
     "session_rename": SessionRenameCmd,
     "session_delete": SessionDeleteCmd,
     "session_summary": SessionSummaryCmd,
+    "session_truncate": SessionTruncateCmd,
     "tools_list": ToolsListCmd,
     "skills_list": SkillsListCmd,
     "compact": CompactCmd,

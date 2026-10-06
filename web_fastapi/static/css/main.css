@@ -237,6 +237,16 @@ input:focus, textarea:focus {
   flex: 1; overflow-y: auto; padding: 1.8rem 2.5rem;
 }
 .msg { margin: 0.8rem 0; display: flex; }
+/* P4-5 长会话渲染裁剪：视口外的历史消息行跳过 layout/paint，长会话回看/
+   追加消息不再为整屏外的行付布局成本。只作用于 .messages 的直接消息行
+   （.msg），工具面板等其余子节点不受影响。contain-intrinsic-size 给从未
+   渲染过的行一个估算高度供 scrollHeight 计算用，auto 关键字让浏览器记住
+   实际渲染尺寸——估算误差只发生在首次滚过，生成中的气泡行必然在视口内
+   （完整渲染），吸底距离计算不受影响。 */
+.messages > .msg {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 150px;
+}
 .msg.user { justify-content: flex-end; }
 .msg .bubble {
   max-width: 70%; padding: 0.9rem 1.15rem; border-radius: var(--radius-lg);
@@ -292,6 +302,16 @@ input:focus, textarea:focus {
 }
 .msg .bubble pre:hover .copy-btn { opacity: 1; }
 .msg .bubble pre .copy-btn:hover { background: rgba(255,255,255,0.22); }
+
+/* P4-2 流式尾块降级占位（markdown.js createBlockRenderer）：尾块超限时，
+   溢出头部以 textContent 纯文本写入此元素。pre-wrap 保住换行/缩进——降级
+   的大头是未闭合代码围栏，等宽 + pre-wrap 与终渲代码块观感靠拢；块边界
+   出现后尾块缩回正常路径，complete 终渲后该元素随之消失 */
+.blk-tail-raw {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+}
 
 /* user 气泡悬停操作（2026-09-19：复制 / 编辑重发 / 从此 fork）——
    简约线性图标，DeepSeek 式悬浮在气泡下方右侧，hover 显隐不遮字 */

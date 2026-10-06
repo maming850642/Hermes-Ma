@@ -59,8 +59,15 @@ class SlotsFullError(RuntimeError):
 _EOF = object()
 
 # 泵队列上界（P2-6，docs/architecture.md:81 观察项收口）：worker 日志型
-# 输出不允许拖死读取线程——失控刷屏时队列满则丢弃**新行**并计数，泵线程
+# 输出不允许拖死读取线程——失控刷屏时队列满则挤掉最旧行腾位并计数，泵线程
 # 绝不阻塞；内存占用与读取延迟从此有上界。
+#
+# P2-26 演进为「丢最旧」（对齐 chat_bus.put_drop_oldest 语义）：P2-6 原版
+# 满时丢**新行**——消费侧 send_stream 被事件循环饿住、worker 高速刷 token
+# 行时，队列积压满后继续丢新行，而当前请求的 result/done 终态帧恰是新行，
+# 丢了就 SSE 假死最长 DEFAULT_TIMEOUT（300s）。终态帧/新行承载请求的结局，
+# 比旧日志行更有价值；旧日志行只剩观赏价值，丢它代价最小。EOF 哨兵必达性
+# 不变：EOF 是该 worker 的最后一帧，入队后不再有后续 put，不会被挤掉。
 STDOUT_QUEUE_MAXSIZE = 2000
 #: 每累计丢弃这么多行打一条 warning 汇总（不逐行刷日志）
 STDOUT_DROP_WARN_EVERY = 500
@@ -74,10 +81,15 @@ class _StdoutPump:
     该 worker 的后续命令就不可靠了。常驻单读者 + queue.get(timeout) 根治：
     零线程churn、超时只是本次 get 放弃（行仍在队列里）。
 
-    P2-6 有界化：队列满（maxsize，默认 2000 行）时丢弃新行并累计计数
-    （每 STDOUT_DROP_WARN_EVERY 条打一条 warning 汇总），读取循环绝不阻塞。
-    保序语义保留「最旧的行优先」：满时丢的是**新**行。EOF 哨兵必达——满时
-    挤掉最旧一行腾位（计入丢弃），否则「worker 已退出」会被误报成响应超时。
+    P2-6 有界化：队列满（maxsize，默认 2000 行）时挤掉最旧一行腾位并累计
+    计数（每 STDOUT_DROP_WARN_EVERY 条打一条 warning 汇总），读取循环绝不
+    阻塞。EOF 哨兵必达——满时挤掉最旧一行腾位（计入丢弃），否则「worker
+    已退出」会被误报成响应超时。
+
+    P2-26 丢新行 → 丢最旧（对齐 chat_bus.put_drop_oldest）：原版满时丢
+    **新行**，消费侧被饿 + worker 高速刷屏时终态帧（result/done 必是新行）
+    被丢，SSE 假死最长 DEFAULT_TIMEOUT。新行/终态帧比旧行更有价值，旧日志
+    行价值低——满时改挤最旧（演进理由详见模块头 P2-26 注释块）。
     """
 
     def __init__(self, proc_stdout, maxsize: int = STDOUT_QUEUE_MAXSIZE):
@@ -98,21 +110,20 @@ class _StdoutPump:
         if self._dropped_since_warn >= STDOUT_DROP_WARN_EVERY:
             logger.warning(
                 f"worker stdout 队列满（maxsize={self._q.maxsize}），"
-                f"已累计丢弃 {self.dropped} 行输出（worker 刷屏/卡死？）")
+                f"已累计丢弃最旧 {self.dropped} 行输出（worker 刷屏/消费过慢？）")
             self._dropped_since_warn = 0
 
     def _put(self, item) -> None:
-        """入队且绝不阻塞：普通行满即丢（计数）；EOF 必入队（满则挤掉最旧行）。"""
+        """入队且绝不阻塞：满则挤掉最旧一行腾位重试（P2-26 对齐
+        chat_bus.put_drop_oldest 语义），丢弃计数；EOF 同走挤最旧腾位——
+        EOF 是最后一帧，入队后不再有后续 put，必达且不会被挤掉。"""
         while True:
             try:
                 self._q.put_nowait(item)
                 return
             except _q.Full:
-                if item is not _EOF:
-                    self._note_drop()
-                    return
-                # EOF 腾位：挤掉最旧一行（消费线程并发取走时 get 会抛
-                # Empty——下一轮 put 自会成功，循环必然终止：仅本线程在写）
+                # 挤掉最旧一行腾位（消费线程并发取走时 get 会抛 Empty——
+                # 下一轮 put 自会成功，循环必然终止：仅本线程在写）
                 try:
                     self._q.get_nowait()
                     self._note_drop()

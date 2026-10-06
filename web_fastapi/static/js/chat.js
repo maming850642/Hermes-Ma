@@ -107,16 +107,25 @@ function refreshEmptyState() {
 
 // 滚动监听：离底部远时显示「回到底部」+ 维护 sticky-scroll 跟随态
 // （2026-09-19：生成中用户上翻不再被强制拽回——同源阈值，一套距离计算）
+// P4-4 方向感知吸底：旧逻辑 followBottom = nearBottom（120px 窗口）还有个
+// 反直觉后果——用户下翻历史刚滑进窗口，就被每帧 flush 的 scrollBottom 拽回
+// 底部，下翻手势被吞（上次只修了上翻方向）。改为：上滚（scrollTop 变小）
+// 立即脱离跟随；仅距底 <24px 才重新吸底；两者之间保持原值不抢。程序滚动
+// （scrollBottom → scrollTop=scrollHeight，距底 0）仍会把 followBottom 收敛
+// 回 true，状态自洽。
 const STICKY_THRESHOLD = 120;
+const REATTACH_THRESHOLD = 24;   // 重新吸底的贴底距离（下翻到贴近底部自然续上跟随）
 let followBottom = true;
-function isNearBottom() {
-  return msgBox.scrollHeight - msgBox.scrollTop - msgBox.clientHeight < STICKY_THRESHOLD;
-}
+let _lastScrollTop = msgBox.scrollTop;
 msgBox.addEventListener('scroll', () => {
-  const nearBottom = isNearBottom();
-  followBottom = nearBottom;
+  const st = msgBox.scrollTop;
+  const distBottom = msgBox.scrollHeight - st - msgBox.clientHeight;
+  if (st < _lastScrollTop) followBottom = false;                  // 上滚：立即脱离跟随
+  else if (distBottom < REATTACH_THRESHOLD) followBottom = true;  // 贴底：重新吸
+  /* 其余（下翻进窗但未贴底）：保持原值——不抢用户滚动 */
+  _lastScrollTop = st;
   if (!scrollBottomBtn) return;
-  scrollBottomBtn.classList.toggle('visible', !nearBottom);
+  scrollBottomBtn.classList.toggle('visible', distBottom >= STICKY_THRESHOLD);
 });
 if (scrollBottomBtn) {
   scrollBottomBtn.addEventListener('click', () => {
@@ -763,16 +772,24 @@ async function streamMessage(endpoint, body, isResume, _retry = 0, _reuseBubble 
   // 2s 间隙放开发送，用户可双发消息抢同一 worker 槽。
   let keepLock = false;
   // 流式渲染节流：SSE chunk 常几十个一组到达，逐 token 渲染是卡顿源。
-  // 统一 50ms 合帧刷新；渲染走块级增量（streamContent/streamReasoning：
+  // 基础 50ms 合帧刷新；渲染走块级增量（streamContent/streamReasoning：
   // 已闭合块缓存追加 + 仅重渲尾块，光标 ▌ 只在尾块），
   // complete/异常路径强制终渲。
+  // P4-3 自适应降频：单次渲染（含 scrollBottom 的强制重排）实测超过单帧预算
+  // （60Hz 两帧 ≈32ms）→ 下次间隔翻倍（上限 400ms），把偶发长帧（长闭合块
+  // 首渲、长围栏定型等）挡在可交互线外；渲染轻松则逐级减半回落到 50ms 跟手。
+  // 只影响下一次调度，「有 dirty 才渲」的语义不变。
   const FLUSH_MS = 50;
+  const FLUSH_MAX_MS = 400;
+  const FLUSH_SLOW_MS = 32;
+  let _flushMs = FLUSH_MS;
   let _dirtyText = false, _dirtyReasoning = false, _renderTimer = null;
     const flushRender = () => {
       _renderTimer = null;
       const dirtyT = _dirtyText, dirtyR = _dirtyReasoning;
       _dirtyText = _dirtyReasoning = false;
       if (!dirtyT && !dirtyR) return;
+      const t0 = performance.now();
       const b = ensureBubble();
       if (dirtyR) streamReasoning(b, reasoningText, true);
       if (dirtyT) {
@@ -785,10 +802,13 @@ async function streamMessage(endpoint, body, isResume, _retry = 0, _reuseBubble 
         }
       }
       scrollBottom();
+      const cost = performance.now() - t0;
+      if (cost > FLUSH_SLOW_MS) _flushMs = Math.min(_flushMs * 2, FLUSH_MAX_MS);
+      else if (_flushMs > FLUSH_MS) _flushMs = Math.max(FLUSH_MS, Math.floor(_flushMs / 2));
     };
   const scheduleRender = () => {
     if (_renderTimer !== null) return;
-    _renderTimer = setTimeout(flushRender, FLUSH_MS);
+    _renderTimer = setTimeout(flushRender, _flushMs);
   };
   const cancelRender = () => {
     if (_renderTimer !== null) { clearTimeout(_renderTimer); _renderTimer = null; }

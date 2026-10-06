@@ -311,12 +311,18 @@ async def chat_stream(body: ChatRequest, request: Request):
         wm = request.app.state.worker_manager
         wp = wm.lookup(LOCAL_USER, sid)
         if not (wp is not None and getattr(wp, "streaming", False)):
-            try:
-                from src.storage.projects_store import get_active_project
-                project = get_active_project()
-            except Exception:
-                project = ""
-            prelogged = _prelog_turn(request.app, sid, body.message, project)
+            def _prelog_on_pool() -> bool:
+                # P2-11：get_active_project（SQLite 读）+ _prelog_turn（JSON
+                # 快照原子写 + 2 次 SQLite INSERT）都是阻塞调用，包进线程池
+                # （对齐下方 _worker_for 的用法）。busy 短路判定留在本协程
+                # （内存读），预写语义与返回值不变。
+                try:
+                    from src.storage.projects_store import get_active_project
+                    project = get_active_project()
+                except Exception:
+                    project = ""
+                return _prelog_turn(request.app, sid, body.message, project)
+            prelogged = await run_in_threadpool(_prelog_on_pool)
     try:
         worker = await run_in_threadpool(_worker_for, request, body.session_id)
     except SlotsFullError as e:
@@ -358,23 +364,29 @@ async def chat_stream_subscribe(request: Request, sid: str, after: int | None = 
     after = max(0, after)
 
     bus = _get_bus(request.app)
-    # 原子两段式订阅：快照补差帧 + 在途标志（subscribe）→ 判定在途 →
-    # 注册实时扇出（attach）。两步之间无 await，与 publish/end_turn
-    # 互斥——不存在漏帧窗口。
-    sub = bus.subscribe(sid, after)
     wp = request.app.state.worker_manager.lookup(LOCAL_USER, sid)
     probe_live = bool(wp is not None and getattr(wp, "streaming", False))
-    live = sub.live or probe_live
+    # spawn 窗口兜底：总线/激活探测皆 false ≠ 无在途——主进程预写的
+    # turn/start 尚无 turn/end 配对时，本轮正等 worker spawn/首帧。
+    # 直读事件库（零锁）：从尾向前找最近的轮边界，turn/start 未被
+    # turn/end 闭合且在时效窗内 → 按在途等待（gen 的 keepalive 循环
+    # 会复核，真死轮由等待预算兜底收流）；超窗（spawn 失败/历史孤儿，
+    # 如测试遗留）不等待，照旧立即 done。
+    # P2-11：events() 全表扫描是阻塞调用，包进线程池——因此兜底判定
+    # 挪到 subscribe **之前**（subscribe→attach 之间不得有 await 的原子
+    # 两段式约定不变）：判定期间发布的帧落在通道缓冲里，随后的
+    # subscribe 快照照常带出，无漏帧窗口。判定条件与旧实现等价
+    # （probe_live 直通；bus.turn_active 即 subscribe 将返回的 live，
+    # 免一次无谓扫库）。
     spawn_window = False   # 事件兜底判定的在途（区别于幽灵 probe_live）
-    if not live:
-        # spawn 窗口兜底：总线/激活探测皆 false ≠ 无在途——主进程预写的
-        # turn/start 尚无 turn/end 配对时，本轮正等 worker spawn/首帧。
-        # 直读事件库（零锁）：从尾向前找最近的轮边界，turn/start 未被
-        # turn/end 闭合且在时效窗内 → 按在途等待（gen 的 keepalive 循环
-        # 会复核，真死轮由等待预算兜底收流）；超窗（spawn 失败/历史孤儿，
-        # 如测试遗留）不等待，照旧立即 done。
+    db_live = False
+    if not probe_live and not bus.turn_active(sid):
         try:
-            events = _sessions_log_from_app(request.app).events(sid)
+            def _scan_events() -> list[dict]:
+                # SessionLog 回退构造（sqlite3.connect + 建表）同为阻塞
+                # 调用，一并放池内
+                return _sessions_log_from_app(request.app).events(sid)
+            events = await run_in_threadpool(_scan_events)
             for ev in reversed(events):
                 t = ev.get("type")
                 if t == "turn/end":
@@ -382,11 +394,16 @@ async def chat_stream_subscribe(request: Request, sid: str, after: int | None = 
                 if t == "turn/start":
                     ts = float(ev.get("ts") or 0)
                     if ts <= 0 or (time.time() - ts) <= 600.0:
-                        live = True
+                        db_live = True
                         spawn_window = True
                     break
         except Exception:
             pass
+    # 原子两段式订阅：快照补差帧 + 在途标志（subscribe）→ 判定在途 →
+    # 注册实时扇出（attach）。两步之间无 await，与 publish/end_turn
+    # 互斥——不存在漏帧窗口。
+    sub = bus.subscribe(sid, after)
+    live = sub.live or probe_live or db_live
     if live:
         bus.attach(sid, sub, immediate_end=probe_live and not spawn_window)
 

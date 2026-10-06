@@ -1,30 +1,33 @@
 // 会话恢复调度（/active 有界重试判据 + 在途轮次恢复分发 + EventSource 续流 + 后台生成探测 + 会话恢复轮询 + 提示条停止）——自 chat.js 顺延外置拆出，逐字搬移（split02，源区间 chat.js L1341-1782 与 L1892-2095，中段 _restoreViaCurrent/loadCurrentSession 仍留 chat.js）
 // —— /active 探测 false 的有界重试判据（防 spawn 窗口盲区一次性放弃）——
 // worker 首轮 spawn（最长 60s）与泵首帧之间 wp.streaming 恒 false，
-// /api/chat/active 一次 false ≠ 无在途轮次。探测 false 时查事件库
-// （主进程直读 SQLite，零锁）：满足其一即值得重试——
-//   (a) 距最后一次 turn/start < 20s（本轮刚开始，正处 spawn 窗口）；
+// /api/chat/active 一次 false ≠ 无在途轮次。探测 false 时查事件库的
+// **轻量端点 /api/sessions/{sid}/last_event**（主进程直读 SQLite 零锁，
+// 只取最后一条事件，绝不拉全量——旧实现每轮询一次就触发一次 /events
+// 全表扫描 + 逐行 json 解析，长会话上 3s×6 次把主进程拖垮）：满足其一
+// 即值得重试——
+//   (a) 最后一条事件距 < 20s（本轮刚开始/预写刚落盘，正处 spawn 窗口；
+//       turn/start 先于本轮一切事件落盘，末条新鲜 ⟹ 开轮也新鲜）；
 //   (b) 最后一条事件还停在 turn/start（本轮已开轮、尚未落任何分段——
 //       生成早期常态；已见 turn/end 的死轮不满足，照旧收敛）。
-// 调用方以 3s × ACTIVE_RETRY_MAX 有界重试，超限回落既有 dismiss/停止
-// 逻辑（不会死循环）。事件请求失败按「不可判定」→ 不重试，保守收敛。
+// 判定与旧全量扫描同向且只宽不严：旧「距最近 turn/start < 20s」在此
+// 收窄为「距最后一条事件 < 20s」（turn/start.ts ≤ 末条 ts，末条新鲜必
+// 蕴含开轮新鲜）；多出的重试（如刚结束的轮）仍被 3s×6 有界收敛，
+// 方向保守。调用方以 3s × ACTIVE_RETRY_MAX 有界重试，超限回落既有
+// dismiss/停止逻辑（不会死循环）。事件请求失败按「不可判定」→ 不重试，
+// 保守收敛。
 const ACTIVE_RETRY_INTERVAL_MS = 3000;
 const ACTIVE_RETRY_MAX = 6;
 const ACTIVE_RETRY_WINDOW_MS = 20000;
 async function _activeRetryEligible(sid) {
   try {
-    const er = await fetch('/api/sessions/' + encodeURIComponent(sid) + '/events');
+    const er = await fetch('/api/sessions/' + encodeURIComponent(sid) + '/last_event');
     if (!er.ok) return false;
-    const events = ((await er.json().catch(() => ({}))) || {}).events;
-    if (!Array.isArray(events) || !events.length) return false;
-    if (((events[events.length - 1] || {}).type || '') === 'turn/start') return true;
-    for (let i = events.length - 1; i >= 0; i--) {
-      if ((events[i] || {}).type === 'turn/start') {
-        const ts = Number(events[i].ts || 0);
-        return ts > 0 && (Date.now() / 1000 - ts) * 1000 < ACTIVE_RETRY_WINDOW_MS;
-      }
-    }
-    return false;   // 流里无 turn/start（异常数据）→ 不可判定，不重试
+    const ev = ((await er.json().catch(() => ({}))) || {}).last_event;
+    if (!ev || typeof ev !== 'object') return false;   // 空会话/降级 → 不可判定，不重试
+    if (((ev || {}).type || '') === 'turn/start') return true;
+    const ts = Number(ev.ts || 0);
+    return ts > 0 && (Date.now() / 1000 - ts) * 1000 < ACTIVE_RETRY_WINDOW_MS;
   } catch (e) {
     return false;
   }
