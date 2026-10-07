@@ -16,6 +16,44 @@
 
 ![欢迎页 · 项目选择器](docs/images/screenshots/web-home.png)
 
+## 🎬 Demo
+
+Web 端「欢迎页选项目 → 对话 → 审批」的完整界面见下文各节截图；CLI 端一轮典型工作流如下（示意节选）——白名单内的只读命令免审批直接执行，写文件先弹 HITL 审批：
+
+```text
+$ python main.py
+╭──────────────╮
+│ ⚡ Hermes—Ma │
+╰──────────────╯
+  ✅ 系统初始化完成！
+  🔧 生效工具 19 个 | 工作区: 已挂载（local）~/repos/flask-app
+
+  👤 local: 统计 src/ 下 Python 代码行数，Top 10 写进 reports/loc.md
+
+  + 🔧 bash ──────────────────────────────────────+
+  | 📥 find src -name "*.py" | xargs wc -l | head |
+  | ✅ 847 total ...                              |
+  +───────────────────────────────────────────────+
+
+  ╭─ 🔒 等待人工审批 ────────────────────────────╮
+  │ 操作: bash                                   │
+  │ 详情: mkdir -p reports && … > reports/loc.md │
+  ╰──────────────────────────────────────────────╯
+  请输入审批结果
+    approve = 批准
+    reject:原因 = 拒绝并附带原因
+    其他任何输入 = 拒绝
+  : approve
+  ✅ 已批准执行 bash
+
+  ╭─ 🤖 HermesMa ───────────────────────────────────────╮
+  │ 已写入 reports/loc.md：共 847 行 Python，最重的三个 │
+  │ 文件是 agent/agent_v3.py、tools/…（完整清单见文件） │
+  ╰─────────────────────────────────────────────────────╯
+```
+
+跑起来见下文 [快速开始](#-快速开始)——`bash setup.sh` 一条命令到位，Web / CLI 二选一。
+
 ## 🚀 快速开始
 
 ### 方式一：一键脚本（推荐）
@@ -177,6 +215,54 @@ python main.py
 
 ## 🏗️ 架构
 
+### 总体拓扑
+
+```mermaid
+flowchart TB
+    subgraph FE["客户端"]
+        CLI["🖥 CLI · Rich 终端"]
+        WEB["🌐 浏览器 · Jinja2 多页 + vanilla JS"]
+    end
+
+    CLI -->|"进程内直调"| CTX
+    WEB -->|"REST / SSE"| API
+
+    subgraph MAIN["FastAPI 主进程"]
+        API["路由层<br/>安全校验在前 · 免认证仅回环"]
+        CTX["Cordis Context<br/>cordis.yaml 声明的 10 个插件"]
+        WM["WorkerManager<br/>多槽位 · 会话亲和 · 有界排队"]
+        SCHED["SchedulerService（daemon 线程）<br/>waker / flow / 记忆聚合 / 卫生任务"]
+        RR["RunRegistry 任务账本"]
+    end
+
+    API --> WM
+    SCHED --> T1
+    RR -->|"fork + 硬截止"| T2
+
+    subgraph SUB["子进程"]
+        W1["默认槽 main<br/>杂项 op"]
+        W2["会话槽 ×N（默认 3）<br/>HermesAgentV3 完整循环<br/>工具执行 · HITL"]
+        T1["waker run / flow node"]
+        T2["git clone"]
+    end
+
+    WM -->|"stdin/stdout NDJSON"| W1
+    WM -->|"stdin/stdout NDJSON"| W2
+    W2 -.->|"mcp__server__tool"| MCP["MCP 服务器子进程<br/>mcp_servers/*.json · 热加载"]
+    W2 -->|"OpenAI 兼容 API"| LLM["LLM 服务"]
+    T1 --> LLM
+
+    subgraph STORE["存储"]
+        DB[("SQLite data/hermes.db · WAL<br/>events / kv / memories / projects / snapshots")]
+        FS["data/sessions/ 快照 + 冷归档<br/>data/projects/spaces/ 托管工作区<br/>data/home/ wakers 等"]
+    end
+
+    MAIN --> DB
+    W1 --> DB
+    W2 --> DB
+    DB --- FS
+```
+
 ### Cordis 插件内核（Python 版）
 
 按 DeepSeek Harness 的 Cordis 元框架模式实现（`src/cordis/`）：**一切能力皆插件**，挂在共享 Context 上，`cordis.yaml` 一张清单声明组合：
@@ -198,6 +284,15 @@ plugins:
 核心机制：**Context = 服务仓库**（`ctx.tools` / `ctx.llm` 稳定键）；**inject 声明依赖**（加载顺序自动推导）；**类型化事件**（emit/waterfall/parallel/serial 四种分发，权限决策是 `tools/pre-execute` waterfall 监听器——deny 即短路）；**注册皆可逆**（teardown LIFO 回滚）；**作用域**（waker run 用 `ctx.scope()` 做工具白名单，取代旧 monkey-patch）。
 
 Agent 循环本身也是事件化的：`agent/pre-step`（记忆注入/压缩/模式指导是监听器）→ `agent/request` → `llm/stream` → `tools/*` → `agent/turn-stopping`。
+
+```mermaid
+flowchart LR
+    A["agent/pre-step<br/>记忆注入 / 压缩 / 模式指导（均为监听器）"] --> B["agent/request"]
+    B --> C["llm/stream"]
+    C --> D["tools/*<br/>三层权限 waterfall · deny 短路"]
+    D -->|"继续下一步"| A
+    D -->|"轮结束"| E["agent/turn-stopping<br/>事件落库 → turn/end"]
+```
 
 ### 事件溯源会话
 

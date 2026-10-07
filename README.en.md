@@ -16,6 +16,44 @@ A single-user AI agent workbench organized around **project spaces** — pick, c
 
 ![Welcome page · project picker](docs/images/screenshots/web-home.png)
 
+## 🎬 Demo
+
+The full Web flow (welcome page → project → chat → approval) is shown in the section screenshots below. Here is a typical CLI round (stylized excerpt; the UI is currently Chinese-first — 等待人工审批 = waiting for human approval, 批准 = approve, 拒绝 = reject). Read-only whitelisted commands run without approval; writing a file pops the HITL approval first:
+
+```text
+$ python main.py
+╭──────────────╮
+│ ⚡ Hermes—Ma │
+╰──────────────╯
+  ✅ 系统初始化完成！
+  🔧 生效工具 19 个 | 工作区: 已挂载（local）~/repos/flask-app
+
+  👤 local: 统计 src/ 下 Python 代码行数，Top 10 写进 reports/loc.md
+
+  + 🔧 bash ──────────────────────────────────────+
+  | 📥 find src -name "*.py" | xargs wc -l | head |
+  | ✅ 847 total ...                              |
+  +───────────────────────────────────────────────+
+
+  ╭─ 🔒 等待人工审批 ────────────────────────────╮
+  │ 操作: bash                                   │
+  │ 详情: mkdir -p reports && … > reports/loc.md │
+  ╰──────────────────────────────────────────────╯
+  请输入审批结果
+    approve = 批准
+    reject:原因 = 拒绝并附带原因
+    其他任何输入 = 拒绝
+  : approve
+  ✅ 已批准执行 bash
+
+  ╭─ 🤖 HermesMa ───────────────────────────────────────╮
+  │ 已写入 reports/loc.md：共 847 行 Python，最重的三个 │
+  │ 文件是 agent/agent_v3.py、tools/…（完整清单见文件） │
+  ╰─────────────────────────────────────────────────────╯
+```
+
+To run it, see [Quick Start](#-quick-start) below — one command, `bash setup.sh`, then pick Web or CLI.
+
 ## 🚀 Quick Start
 
 ### 1. Install
@@ -156,6 +194,54 @@ Single user (identity is always `local`); the startup banner shows the effective
 
 ## 🏗️ Architecture
 
+### Overall topology
+
+```mermaid
+flowchart TB
+    subgraph FE["Clients"]
+        CLI["🖥 CLI · Rich terminal"]
+        WEB["🌐 Browser · Jinja2 pages + vanilla JS"]
+    end
+
+    CLI -->|"in-process call"| CTX
+    WEB -->|"REST / SSE"| API
+
+    subgraph MAIN["FastAPI main process"]
+        API["Router layer<br/>validation first · no auth, loopback-only"]
+        CTX["Cordis Context<br/>10 plugins declared by cordis.yaml"]
+        WM["WorkerManager<br/>multi-slot · session affinity · bounded queue"]
+        SCHED["SchedulerService (daemon thread)<br/>waker / flow / consolidation / housekeeping"]
+        RR["RunRegistry task ledger"]
+    end
+
+    API --> WM
+    SCHED --> T1
+    RR -->|"fork + hard deadline"| T2
+
+    subgraph SUB["Subprocesses"]
+        W1["default slot main<br/>misc ops"]
+        W2["session slots ×N (cap 3)<br/>full HermesAgentV3 loop<br/>tool exec · HITL"]
+        T1["waker run / flow node"]
+        T2["git clone"]
+    end
+
+    WM -->|"stdin/stdout NDJSON"| W1
+    WM -->|"stdin/stdout NDJSON"| W2
+    W2 -.->|"mcp__server__tool"| MCP["MCP server subprocess<br/>mcp_servers/*.json · hot reload"]
+    W2 -->|"OpenAI-compatible API"| LLM["LLM service"]
+    T1 --> LLM
+
+    subgraph STORE["Storage"]
+        DB[("SQLite data/hermes.db · WAL<br/>events / kv / memories / projects / snapshots")]
+        FS["data/sessions/ snapshots + cold archive<br/>data/projects/spaces/ managed workspaces<br/>data/home/ wakers etc."]
+    end
+
+    MAIN --> DB
+    W1 --> DB
+    W2 --> DB
+    DB --- FS
+```
+
 ### The Cordis plugin kernel (Python port)
 
 Implemented after the Cordis meta-framework pattern from DeepSeek Harness (`src/cordis/`): **every capability is a plugin** attached to a shared Context, composed by one `cordis.yaml` manifest:
@@ -177,6 +263,15 @@ plugins:
 Core mechanics: **Context = service registry** (stable keys like `ctx.tools` / `ctx.llm`); **declarative `inject`** (load order is derived automatically); **typed events** (four dispatch flavors — emit/waterfall/parallel/serial; the permission decision is a `tools/pre-execute` waterfall listener — deny short-circuits); **reversible registration** (teardown rolls back LIFO); **scopes** (waker runs use `ctx.scope()` for tool whitelists, replacing the old monkey-patching).
 
 The agent loop itself is event-driven: `agent/pre-step` (memory injection / compaction / mode guidance are listeners) → `agent/request` → `llm/stream` → `tools/*` → `agent/turn-stopping`.
+
+```mermaid
+flowchart LR
+    A["agent/pre-step<br/>memory injection / compaction / mode guidance (listeners)"] --> B["agent/request"]
+    B --> C["llm/stream"]
+    C --> D["tools/*<br/>3-layer permission waterfall · deny short-circuits"]
+    D -->|"next step"| A
+    D -->|"turn ends"| E["agent/turn-stopping<br/>events persisted → turn/end"]
+```
 
 ### Event-sourced sessions
 
